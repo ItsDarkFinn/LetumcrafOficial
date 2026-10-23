@@ -95,9 +95,26 @@ public final class ResurrectionRitual implements Listener {
             tell(activator, "&cEse jugador ya no está en el registro de eliminados.");
             return;
         }
-        if (plugin.deaths().hasBeenRevived(targetId.toString())) {
+        boolean seasonActive = isSeasonActive();
+          if (!seasonActive && plugin.deaths().hasBeenRevived(targetId.toString())) {
             tell(activator, "&cEse jugador ya recibió su única resurrección.");
-            return;
+              return;
+        }
+        if (seasonActive) {
+            RevivalPolicy.Decision policy = plugin.seasonService().evaluateRevival(
+                    targetId, true, System.currentTimeMillis());
+            if (!policy.allowed()) {
+                tell(activator, "&cLa Fosa no autoriza esta vuelta: "
+                        + String.join(" ", policy.missing()));
+                return;
+            }
+            if (policy.path() == RevivalPolicy.Path.ALTAR_SOLO
+                    || policy.path() == RevivalPolicy.Path.VALVE_SOLO) {
+                tell(activator, "&cCon " + plugin.seasonService().aliveN()
+                        + " vivos el camino es el altar solitario de La Fosa (+1 Núcleo, "
+                        + policy.cost() + " Chispas): no uses el Sello aquí.");
+                return;
+            }
         }
         if (sessionsByTarget.containsKey(targetId)) {
             tell(activator, "&cYa hay un ritual en curso para esa muerte.");
@@ -111,8 +128,10 @@ public final class ResurrectionRitual implements Listener {
         Location center = event.getClickedBlock().getLocation().add(0.5, 0.5, 0.5);
         double radius = getRadius();
         List<Player> nearbyParticipants = findNearbyParticipants(activator, center, radius);
-        if (nearbyParticipants.size() < 2) {
-            tell(activator, "&cNecesitas a otro jugador vivo a menos de " + radius + " bloques.");
+        int required = requiredPresent();
+          if (nearbyParticipants.size() < required) {
+            tell(activator, "&cNecesitas " + required + " participante(s) vivo(s) a menos de "
+                      + radius + " bloques (vivos del roster: " + rosterAlive() + ").");
             return;
         }
 
@@ -174,11 +193,12 @@ public final class ResurrectionRitual implements Listener {
             session.departedAt.remove(deadParticipant);
             sessionsByParticipant.remove(deadParticipant, session);
         }
-        if (presentParticipants.size() < 2) {
-            UUID leaverId = session.departedAt.entrySet().stream()
-                    .max(Map.Entry.comparingByValue()).map(Map.Entry::getKey).orElse(null);
-            cancel(session, leaverId, "El grupo se quedó con menos de dos participantes cerca y el ritual se interrumpió.", leaverId != null);
-            return;
+        int required = requiredPresent();
+          if (presentParticipants.size() < required) {
+              UUID leaverId = session.departedAt.entrySet().stream()
+                      .max(Map.Entry.comparingByValue()).map(Map.Entry::getKey).orElse(null);
+            cancel(session, leaverId, "El grupo se quedó con menos de " + required + " participante(s) cerca y el ritual se interrumpió.", leaverId != null);
+              return;
         }
 
         session.ticksLeft--;
@@ -213,8 +233,63 @@ public final class ResurrectionRitual implements Listener {
         return marker != null && marker == (byte) 1;
     }
 
+    /** Participantes mínimos: variable por roster en temporada (2 con ≥3 vivos, 1 con 2), 2 legado. */
+    int requiredPresent() {
+        try {
+            SeasonService seasons = plugin.seasonService();
+            if (seasons != null && seasons.isSeasonActive()) {
+                return RevivalPolicy.requiredParticipants(seasons.aliveN());
+            }
+        } catch (RuntimeException ignored) {
+        }
+        return 2;
+    }
+
+    private boolean isSeasonActive() {
+        try {
+          SeasonService seasons = plugin.seasonService();
+          return seasons != null && seasons.isSeasonActive();
+        } catch (RuntimeException ignored) {
+          return false;
+        }
+    }
+
+    private int rosterAlive() {
+        try {
+          SeasonService seasons = plugin.seasonService();
+          if (seasons != null && seasons.isSeasonActive()) {
+              return seasons.aliveN();
+          }
+        } catch (RuntimeException ignored) {
+        }
+        return -1;
+    }
+
     private void complete(RitualSession session) {
-        if (!plugin.deaths().revive(session.targetName)) {
+        if (isSeasonActive()) {
+            RevivalPolicy.Decision decision = plugin.seasonService().trySeasonRevive(
+                    session.targetId, true, System.currentTimeMillis());
+            if (!decision.allowed()) {
+                cancel(session, null, "No se pudo completar la vuelta: "
+                        + String.join(" ", decision.missing()), false);
+                return;
+            }
+            clearWaveMobs(session);
+            close(session);
+            releaseOnlineTarget(session.targetId);
+            Bukkit.broadcastMessage(color(plugin.getConfig().getString("messages.prefix", "")
+                    + "&dEl ritual tuvo éxito: &f" + session.targetName
+                    + " &dvuelve a Letumcraft (vuelta "
+                    + plugin.seasonService().revivalsOf(session.targetId) + "/3; si estaba conectado ya salió de La Fosa). Regresará sin inventario."));
+            for (UUID participantId : session.participants) {
+                Player participant = plugin.getServer().getPlayer(participantId);
+                if (participant != null) participant.sendTitle("§5Ritual completado", "§d" + session.targetName + " volverá al conectarse", 5, 50, 10);
+            }
+            return;
+        }
+        if (!plugin.deaths().isDead(session.targetId)
+                || plugin.deaths().hasBeenRevived(session.targetId)
+                || !plugin.deaths().revive(session.targetId)) {
             cancel(session, null, "No se pudo completar la resurrección. El Núcleo fue devuelto.", false);
             return;
         }
@@ -226,6 +301,44 @@ public final class ResurrectionRitual implements Listener {
         for (UUID participantId : session.participants) {
             Player participant = plugin.getServer().getPlayer(participantId);
             if (participant != null) participant.sendTitle("§5Ritual completado", "§d" + session.targetName + " volverá al conectarse", 5, 50, 10);
+        }
+    }
+
+    /**
+     * Bloque 3 — el objetivo ONLINE en el éxito del ritual no espera al relogin:
+     * consume el retorno pendiente UNA vez (limpia inventario/ender como
+     * RevivalAnchor al unirse) y lo saca de la Fosa a SUPERVIVENCIA en el spawn.
+     * La entrada de Ancla de sacrificio no se toca (solo onRespawn la consume).
+     */
+    private void releaseOnlineTarget(UUID targetId) {
+        Player online;
+        try {
+            online = plugin.getServer().getPlayer(targetId);
+        } catch (RuntimeException exception) {
+            return;
+        }
+        if (online == null || !online.isOnline()) {
+            return;
+        }
+        boolean hadPending = false;
+        try {
+            hadPending = plugin.deaths().takePendingRevival(targetId);
+        } catch (RuntimeException ignored) {
+        }
+        if (hadPending) {
+            try {
+                online.getInventory().clear();
+                online.getEnderChest().clear();
+            } catch (RuntimeException ignored) {
+            }
+        }
+        try {
+            if (plugin.pitController() != null) {
+                plugin.pitController().releaseRevived(online);
+            } else {
+                online.setGameMode(GameMode.SURVIVAL);
+            }
+        } catch (RuntimeException ignored) {
         }
     }
 

@@ -17,6 +17,14 @@ public final class PermanentDeathListener implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onDeath(PlayerDeathEvent event) {
+        // Bloque 4 — tras el sellado no se registra, no se cuenta, no se expulsa
+        // ni se anuncia: la foto del final queda congelada y el muerto ve /pd final.
+        try {
+            if (plugin.seasonService() != null && plugin.seasonService().isSeasonEnded()) {
+                return;
+            }
+        } catch (RuntimeException ignored) {
+        }
         Player player = event.getEntity();
         var deathLocation = player.getLocation().clone();
         plugin.getServer().getScheduler().runTaskLater(plugin,
@@ -27,6 +35,12 @@ public final class PermanentDeathListener implements Listener {
         String reason = plugin.getConfig().getString("permadeath.ban-reason", "Has muerto.");
         String cause = event.getDeathMessage() == null ? "muerte" : ChatColor.stripColor(event.getDeathMessage());
         plugin.deaths().record(player.getUniqueId(), player.getName(), cause);
+        try {
+            if (plugin.seasonService() != null && plugin.seasonService().isSeasonActive()) {
+                plugin.seasonService().noteSeasonDeath(player.getUniqueId());
+            }
+        } catch (RuntimeException ignored) {
+        }
         String title = ChatColor.RED.toString() + ChatColor.BOLD + "Letumcraft";
         String subtitle = ChatColor.WHITE + player.getName() + " ha muerto";
         plugin.getServer().getOnlinePlayers().forEach(viewer ->
@@ -38,11 +52,28 @@ public final class PermanentDeathListener implements Listener {
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onLogin(PlayerLoginEvent event) {
-        if (plugin.getConfig().getBoolean("permadeath.enabled", true)
-                && plugin.deaths().isDead(event.getPlayer().getUniqueId())) {
-            event.disallow(PlayerLoginEvent.Result.KICK_BANNED,
-                    color(plugin.getConfig().getString("permadeath.ban-reason", "Has muerto.")));
+        if (!plugin.getConfig().getBoolean("permadeath.enabled", true)) {
+              return;
+          }
+          if (!plugin.deaths().isDead(event.getPlayer().getUniqueId())) {
+              return;
+          }
+        // Bloque 3: en temporada, el muerto elegible entra SOLO a La Fosa
+        // (PitController lo teleporta y contiene); fuera de temporada/Fosa, ban legado.
+        try {
+            if (plugin.seasonService() != null && plugin.seasonService().isSeasonActive()
+                    && plugin.seasonService().isPitEligible(event.getPlayer().getUniqueId())) {
+                return;
+            }
+            // Bloque 4 — tras el final, el roster (incluidos muertos) entra a ver
+            // estadísticas; no se mantiene muerte activa por error ni se patea.
+            if (plugin.seasonService() != null && plugin.seasonService().isSeasonEnded()) {
+                return;
+            }
+        } catch (RuntimeException ignored) {
         }
+        event.disallow(PlayerLoginEvent.Result.KICK_BANNED,
+                color(plugin.getConfig().getString("permadeath.ban-reason", "Has muerto.")));
     }
 
     private String color(String message) {

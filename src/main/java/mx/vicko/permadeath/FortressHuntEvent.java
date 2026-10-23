@@ -1,6 +1,8 @@
 package mx.vicko.permadeath;
 
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
@@ -18,7 +20,12 @@ import org.bukkit.entity.Player;
 import org.bukkit.entity.Skeleton;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.block.BlockExplodeEvent;
+import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.entity.EntityDeathEvent;
+import org.bukkit.event.entity.EntityExplodeEvent;
+import org.bukkit.event.inventory.InventoryMoveItemEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
@@ -29,10 +36,73 @@ import org.bukkit.scheduler.BukkitTask;
 
 /** Daily Nether expedition at a nearby fortress, with three guard waves and a locked reward chest. */
 public final class FortressHuntEvent implements Listener {
+    static final int TOTAL_WAVES = 3;
+    static final double TITLE_RADIUS_BLOCKS = 20.0;
+    static final long WAVE_DELAY_TICKS = 40L;
+
+    /** Explicit hunt state: the chest stays locked in COMBAT and WAITING, and opens only in REWARD. */
+    enum HuntPhase { IDLE, COMBAT, WAITING, REWARD }
+
+    /**
+     * Pure session logic (no Bukkit calls) so wave/wait/completion transitions are unit-testable
+     * without a server. Production code drives one instance per hunt; tests drive their own.
+     */
+    static final class HuntSession {
+        private final long sessionId;
+        private int wave;
+        private int guardsRemaining;
+        private HuntPhase phase = HuntPhase.COMBAT;
+        private boolean rewardUnlocked;
+
+        HuntSession(long sessionId) { this.sessionId = sessionId; }
+
+        long sessionId() { return sessionId; }
+        int wave() { return wave; }
+        HuntPhase phase() { return phase; }
+        boolean rewardUnlocked() { return rewardUnlocked; }
+
+        void onWaveSpawned(int waveNumber, int guardCount) {
+            wave = waveNumber;
+            guardsRemaining = Math.max(0, guardCount);
+            if (guardsRemaining == 0) {
+                if (waveNumber >= TOTAL_WAVES) { phase = HuntPhase.REWARD; rewardUnlocked = true; }
+                else phase = HuntPhase.WAITING;
+            } else { phase = HuntPhase.COMBAT; rewardUnlocked = false; }
+        }
+
+        enum GuardDeathOutcome { STILL_FIGHTING, WAIT_NEXT_WAVE, REWARD_READY }
+
+        GuardDeathOutcome onGuardDeath() {
+            if (phase != HuntPhase.COMBAT || guardsRemaining <= 0) return GuardDeathOutcome.STILL_FIGHTING;
+            guardsRemaining--;
+            if (guardsRemaining > 0) return GuardDeathOutcome.STILL_FIGHTING;
+            if (wave >= TOTAL_WAVES) { phase = HuntPhase.REWARD; rewardUnlocked = true; return GuardDeathOutcome.REWARD_READY; }
+            phase = HuntPhase.WAITING;
+            return GuardDeathOutcome.WAIT_NEXT_WAVE;
+        }
+
+        void abort() { phase = HuntPhase.IDLE; guardsRemaining = 0; rewardUnlocked = false; }
+
+        void markRewarded() { phase = HuntPhase.REWARD; rewardUnlocked = true; guardsRemaining = 0; }
+
+        boolean isChestLocked() { return phase == HuntPhase.COMBAT || phase == HuntPhase.WAITING; }
+
+        boolean acceptsWaveTask(long token) { return token == sessionId && phase == HuntPhase.WAITING; }
+    }
+
+    static boolean shouldSendWaveTitle(boolean sameWorld, double distanceSquared) {
+        return sameWorld && distanceSquared <= TITLE_RADIUS_BLOCKS * TITLE_RADIUS_BLOCKS;
+    }
+
+    static String waveTitle(int wave) { return "Oleada " + wave + "/" + TOTAL_WAVES; }
+
     private final PermadeathPlugin plugin;
     private final Set<UUID> guards = new HashSet<>();
     private BukkitTask scheduler;
     private BukkitTask cleanupTask;
+    private BukkitTask waveTask;
+    private HuntSession session;
+    private long sessionSeq;
     private Location chestLocation;
     private int wave;
     private boolean manual;
@@ -45,8 +115,11 @@ public final class FortressHuntEvent implements Listener {
     }
 
     public void shutdown() {
-        if (scheduler != null) scheduler.cancel();
-        if (cleanupTask != null) cleanupTask.cancel();
+        if (scheduler != null) { scheduler.cancel(); scheduler = null; }
+        if (cleanupTask != null) { cleanupTask.cancel(); cleanupTask = null; }
+        if (waveTask != null) { waveTask.cancel(); waveTask = null; }
+        sessionSeq++;
+        session = null;
         cleanupGuards();
     }
 
@@ -68,21 +141,41 @@ public final class FortressHuntEvent implements Listener {
         return "Cacería de Fortaleza cancelada; los guardias restantes fueron retirados.";
     }
 
+    /** Bloque 4 — tras el sellado no hay Cacería de Fortaleza automática. */
+    private boolean seasonEnded() {
+        try {
+            return plugin.seasonService() != null && plugin.seasonService().isSeasonEnded();
+        } catch (RuntimeException exception) {
+            return false;
+        }
+    }
+
     private void tick() {
+        if (seasonEnded()) return;
         if (chestLocation != null || !plugin.getConfig().getBoolean("random-events.enabled", true)
                 || !plugin.getConfig().getBoolean("random-events.nether.fortress-hunt.enabled", true)) return;
         int day = plugin.days().getCurrentDay();
         int startDay = Math.max(1, plugin.getConfig().getInt("random-events.nether.fortress-hunt.start-day", 10));
+        if (plugin.seasonService() != null) startDay = plugin.seasonService().mapLegacyDay(startDay);
         if (day < startDay || plugin.getConfig().getInt("random-events.nether.fortress-hunt.last-day", 0) >= day) return;
+        List<Player> candidates = new ArrayList<>();
         for (Player player : Bukkit.getOnlinePlayers()) {
             if (player.getWorld().getEnvironment() == World.Environment.NETHER && player.getGameMode() != org.bukkit.GameMode.SPECTATOR
                     && !plugin.deaths().isDead(player.getUniqueId())) {
-                if (startNear(player, false).startsWith("Cacería de Fortaleza iniciada")) {
-                    plugin.getConfig().set("random-events.nether.fortress-hunt.last-day", day);
-                    plugin.saveConfig();
-                }
-                return;
+                candidates.add(player);
             }
+        }
+        if (candidates.isEmpty()) return;
+        // Gate único de temporada (automático); /pd evento fortaleza iniciar lo omite (prueba manual).
+        try {
+            SeasonService seasons = plugin.seasonService();
+            if (seasons != null && !seasons.passesGateForPlayers(candidates)) return;
+        } catch (RuntimeException ignored) {
+        }
+        Player anchor = candidates.get(0);
+        if (startNear(anchor, false).startsWith("Cacería de Fortaleza iniciada")) {
+            plugin.getConfig().set("random-events.nether.fortress-hunt.last-day", day);
+            plugin.saveConfig();
         }
     }
 
@@ -102,6 +195,10 @@ public final class FortressHuntEvent implements Listener {
         if (!state.update(true, false)) return "No pude preparar el cofre de la Cacería.";
         if (block.getState() instanceof Chest live) fillLoot(live.getBlockInventory());
         chestLocation = chest;
+        if (waveTask != null) { waveTask.cancel(); waveTask = null; }
+        if (cleanupTask != null) { cleanupTask.cancel(); cleanupTask = null; }
+        sessionSeq++;
+        session = new HuntSession(sessionSeq);
         wave = 0;
         manual = test;
         Bukkit.broadcastMessage("§6§lLETUMCRAFT §7— §c¡Una Cacería de Fortaleza comenzó en el Nether! §7Sigan las señales; no se revelan coordenadas.");
@@ -154,7 +251,7 @@ public final class FortressHuntEvent implements Listener {
     }
 
     private void spawnNextWave() {
-        if (chestLocation == null) return;
+        if (chestLocation == null || session == null) return;
         wave++;
         Bukkit.broadcastMessage("§c§lCacería §7— Oleada §e" + wave + "§7/3");
         int piglins = wave == 1 ? 4 : wave == 2 ? 2 : 0;
@@ -162,7 +259,40 @@ public final class FortressHuntEvent implements Listener {
         for (int i = 0; i < piglins; i++) spawnGuard(EntityType.ZOMBIFIED_PIGLIN, false, i);
         if (wave == 3) spawnGuard(EntityType.PIGLIN_BRUTE, true, 0);
         for (int i = 0; i < witherSkeletons; i++) spawnGuard(EntityType.WITHER_SKELETON, false, i + piglins);
-        if (guards.isEmpty()) openChest();
+        session.onWaveSpawned(wave, guards.size());
+        sendWaveTitles();
+        if (session.phase() == HuntPhase.REWARD) { openChest(); return; }
+        if (session.phase() == HuntPhase.WAITING) scheduleNextWave();
+    }
+
+    private void scheduleNextWave() {
+        if (chestLocation == null || session == null) return;
+        long token = session.sessionId();
+        if (waveTask != null) waveTask.cancel();
+        waveTask = Bukkit.getScheduler().runTaskLater(plugin, () -> runPendingWave(token), WAVE_DELAY_TICKS);
+    }
+
+    private void runPendingWave(long token) {
+        waveTask = null;
+        if (chestLocation == null || session == null || !session.acceptsWaveTask(token)) return;
+        // Bloque 4 — oleada pendiente al sellar: se cierra la sesión sin más daño.
+        if (seasonEnded()) { finish(); return; }
+        spawnNextWave();
+    }
+
+    private void sendWaveTitles() {
+        if (chestLocation == null || chestLocation.getWorld() == null) return;
+        String title = "§c§l" + waveTitle(wave);
+        double maxDistSq = TITLE_RADIUS_BLOCKS * TITLE_RADIUS_BLOCKS;
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            if (!player.getWorld().equals(chestLocation.getWorld())) continue;
+            if (player.getLocation().distanceSquared(chestLocation) > maxDistSq) continue;
+            player.sendTitle(title, "", 10, 40, 10);
+        }
+    }
+
+    boolean isChestLocked() {
+        return chestLocation != null && session != null && session.isChestLocked();
     }
 
     private void spawnGuard(EntityType type, boolean captain, int index) {
@@ -196,20 +326,60 @@ public final class FortressHuntEvent implements Listener {
     }
 
     @EventHandler public void onGuardDeath(EntityDeathEvent event) {
-        if (!guards.remove(event.getEntity().getUniqueId()) || chestLocation == null) return;
+        if (!guards.remove(event.getEntity().getUniqueId()) || chestLocation == null || session == null) return;
         event.getDrops().clear();
-        if (guards.isEmpty()) {
-            if (wave < 3) Bukkit.getScheduler().runTaskLater(plugin, this::spawnNextWave, 40L);
-            else openChest();
-        }
+        HuntSession.GuardDeathOutcome outcome = session.onGuardDeath();
+        if (outcome == HuntSession.GuardDeathOutcome.WAIT_NEXT_WAVE) scheduleNextWave();
+        else if (outcome == HuntSession.GuardDeathOutcome.REWARD_READY) openChest();
     }
 
     @EventHandler(ignoreCancelled = true) public void onChestOpen(InventoryOpenEvent event) {
-        if (chestLocation == null || !(event.getPlayer() instanceof Player player)
-                || !(event.getInventory().getHolder() instanceof Chest chest)
-                || !chest.getLocation().equals(chestLocation)
-                || chest.getPersistentDataContainer().getOrDefault(plugin.fortressChestKey(), PersistentDataType.BYTE, (byte) 0) != 1) return;
-        if (!guards.isEmpty()) { event.setCancelled(true); player.sendMessage("§cLa cámara sigue sellada; derrota a todos los guardias."); }
+        if (chestLocation == null || !(event.getPlayer() instanceof Player player) || !isFortressChestInventory(event.getInventory())) return;
+        if (isChestLocked()) { event.setCancelled(true); player.sendMessage("§cLa cámara sigue sellada; derrota a todos los guardias."); }
+    }
+
+    @EventHandler(ignoreCancelled = true) public void onChestBreak(BlockBreakEvent event) {
+        if (isChestLocked() && event.getBlock().getLocation().equals(chestLocation)) {
+            event.setCancelled(true);
+            event.getPlayer().sendMessage("§cLa cámara sigue sellada; derrota a todos los guardias.");
+        }
+    }
+
+    @EventHandler(ignoreCancelled = true) public void onChestPlace(BlockPlaceEvent event) {
+        if (!isChestLocked() || event.getBlockPlaced().getType() != Material.CHEST || chestLocation.getWorld() == null) return;
+        Location placed = event.getBlockPlaced().getLocation();
+        if (placed.getWorld() != null && placed.getWorld().equals(chestLocation.getWorld())
+                && placed.getBlockY() == chestLocation.getBlockY()
+                && Math.abs(placed.getBlockX() - chestLocation.getBlockX()) + Math.abs(placed.getBlockZ() - chestLocation.getBlockZ()) == 1) {
+            event.setCancelled(true);
+            event.getPlayer().sendMessage("§cLa cámara sigue sellada; derrota a todos los guardias.");
+        }
+    }
+
+    @EventHandler(ignoreCancelled = true) public void onChestBlockExplode(BlockExplodeEvent event) {
+        if (isChestLocked()) event.blockList().removeIf(block -> block.getLocation().equals(chestLocation));
+    }
+
+    @EventHandler(ignoreCancelled = true) public void onChestEntityExplode(EntityExplodeEvent event) {
+        if (isChestLocked()) event.blockList().removeIf(block -> block.getLocation().equals(chestLocation));
+    }
+
+    @EventHandler(ignoreCancelled = true) public void onChestHopperMove(InventoryMoveItemEvent event) {
+        if (isChestLocked() && isFortressChestInventory(event.getSource())) event.setCancelled(true);
+    }
+
+    private boolean isFortressChestInventory(org.bukkit.inventory.Inventory inventory) {
+        if (chestLocation == null) return false;
+        var holder = inventory.getHolder();
+        if (holder instanceof Chest chest) return isMarkedFortressChest(chest);
+        if (holder instanceof org.bukkit.block.DoubleChest doubleChest)
+            return isMarkedFortressChest(doubleChest.getLeftSide()) || isMarkedFortressChest(doubleChest.getRightSide());
+        return false;
+    }
+
+    private boolean isMarkedFortressChest(org.bukkit.inventory.InventoryHolder holder) {
+        if (!(holder instanceof Chest chest) || !chest.getLocation().equals(chestLocation)) return false;
+        return chest.getPersistentDataContainer().getOrDefault(plugin.fortressChestKey(), PersistentDataType.BYTE, (byte) 0) == 1;
     }
 
     private void fillLoot(org.bukkit.inventory.Inventory inventory) {
@@ -230,16 +400,42 @@ public final class FortressHuntEvent implements Listener {
     }
 
     private void openChest() {
-        if (chestLocation == null) return;
+        if (chestLocation == null || session == null || wave < TOTAL_WAVES || !guards.isEmpty()) return;
+        session.markRewarded();
         Bukkit.broadcastMessage("§6§lLETUMCRAFT §7— §aLa cámara de la fortaleza quedó despejada. ¡El cofre está abierto!");
-        finish();
+        finishAfterReward();
+    }
+
+    private void finishAfterReward() {
+        if (cleanupTask != null) { cleanupTask.cancel(); cleanupTask = null; }
+        if (waveTask != null) { waveTask.cancel(); waveTask = null; }
+        cleanupGuards();
+        sessionSeq++;
+        session = null;
+        chestLocation = null;
+        wave = 0;
     }
 
     private void finish() {
         if (cleanupTask != null) { cleanupTask.cancel(); cleanupTask = null; }
+        if (waveTask != null) { waveTask.cancel(); waveTask = null; }
+        if (session != null) session.abort();
         cleanupGuards();
+        secureChestAndRemove();
+        sessionSeq++;
+        session = null;
         chestLocation = null;
         wave = 0;
+    }
+
+    private void secureChestAndRemove() {
+        if (chestLocation == null || chestLocation.getWorld() == null) return;
+        Block block = chestLocation.getBlock();
+        if (block.getState() instanceof Chest chest
+                && chest.getPersistentDataContainer().getOrDefault(plugin.fortressChestKey(), PersistentDataType.BYTE, (byte) 0) == 1) {
+            chest.getBlockInventory().clear();
+            block.setType(Material.AIR, false);
+        }
     }
 
     private void cleanupGuards() {

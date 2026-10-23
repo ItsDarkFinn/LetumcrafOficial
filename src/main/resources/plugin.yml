@@ -6,12 +6,21 @@ description: Dificultad progresiva de permadeath basada en días reales.
 commands:
   permadeath:
     description: Consulta o administra la dificultad de Permadeath.
-    usage: /permadeath <estado|fases|dia|auto|pausa|reanudar|fase|muertos|revivir|ancla|nucleo|esquirla|sello|filtro|reserva|evento|caravana|reload>
+    usage: /permadeath <estado|temporada|actos|altar|sacrificios|banco|fases|dia|auto|pausa|reanudar|fase|muertos|revivir|revivirforzado|ancla|nucleo|esquirla|sello|filtro|mascara|cartucho|reserva|evento|caravana|reload>
     aliases: [pd]
 permissions:
   permadeath.admin:
-    description: Permite cambiar el día y el modo de calendario.
+    description: Permite cambiar el dia y el modo de calendario.
+    default: op
+  permadeath.admin.forcerevive:
+    description: Permite /pd revivirforzado conservando el historial.
     default: op
   permadeath.bypassdeath:
     description: Impide el baneo por muerte permanente.
     default: false
+  permadeath.debug:
+    description: Permite los comandos debug de items solo si debug-commands:true en config.
+    default: false
+  permadeath.bank:
+    description: Permite gastar el fondo colectivo del Banco Eclipse (doble confirmacion).
+    default: op

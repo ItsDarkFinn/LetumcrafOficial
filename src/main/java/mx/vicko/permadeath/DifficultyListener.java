@@ -1,6 +1,5 @@
 package mx.vicko.permadeath;
 
-import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 import org.bukkit.Material;
 import org.bukkit.Tag;
@@ -26,8 +25,7 @@ import org.bukkit.enchantments.Enchantment;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
-import org.bukkit.event.block.BlockFadeEvent;
-import org.bukkit.event.block.BlockSpreadEvent;
+
 import org.bukkit.event.entity.CreatureSpawnEvent;
 import org.bukkit.event.entity.EntityCombustEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
@@ -44,6 +42,7 @@ import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerItemConsumeEvent;
 import org.bukkit.event.player.PlayerItemDamageEvent;
 import org.bukkit.event.player.PlayerPortalEvent;
+import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.event.vehicle.VehicleMoveEvent;
 import org.bukkit.inventory.EntityEquipment;
 import org.bukkit.inventory.ItemStack;
@@ -75,7 +74,7 @@ public final class DifficultyListener implements Listener {
         Player player = event.getPlayer();
         Block block = event.getBlock();
         Material material = block.getType();
-        if (plugin.isPhaseActive(10) && Tag.LOGS.isTagged(material) && player.getInventory().getItemInMainHand().getType().isAir()) player.damage(1.0);
+        if (plugin.isPhaseActive(10) && Tag.LOGS.isTagged(material) && !isAxe(player.getInventory().getItemInMainHand().getType())) player.damage(1.0);
 
         if (plugin.isPhaseActive(25) && (Tag.BASE_STONE_OVERWORLD.isTagged(material) || material == Material.DEEPSLATE) && chance(0.05)) {
             if (chance(0.5)) block.setType(Material.LAVA);
@@ -127,6 +126,8 @@ public final class DifficultyListener implements Listener {
     @EventHandler(ignoreCancelled = true)
     public void onBedEnter(PlayerBedEnterEvent event) {
         if (!plugin.isPhaseActive(20) || event.getPlayer().getWorld().getEnvironment() != World.Environment.NORMAL) return;
+        // Bloque 2 (Cama): dormir funciona solo para el elegido; el resto explota como siempre.
+        if (SacrificeListener.mayUseBed(plugin, event.getPlayer())) return;
         event.setUseBed(org.bukkit.event.Event.Result.DENY);
         event.getBed().getWorld().createExplosion(event.getBed().getLocation(), 5.0F, true, true);
     }
@@ -148,9 +149,11 @@ public final class DifficultyListener implements Listener {
         if (plugin.isPhaseActive(60) && mob instanceof Skeleton skeleton && chance(0.08)) {
             Creeper creeper = (Creeper) mob.getWorld().spawnEntity(mob.getLocation(), EntityType.CREEPER);
             creeper.addPassenger(skeleton);
+              // Sincronización inicial: la montura hereda el objetivo del esqueleto si ya existe.
+              // El refresco continuo lo mantiene el propietario D (PhaseTasks). Enderman forzado retirado.
+              if (skeleton.getTarget() instanceof Player initialTarget) creeper.setTarget(initialTarget);
         }
         if (plugin.isPhaseActive(80) && mob instanceof Creeper creeper) { creeper.setSilent(true); if (chance(0.15)) creeper.setInvisible(true); }
-        if (plugin.isPhaseActive(80) && mob instanceof Enderman enderman) targetClosestPlayer(enderman, 50.0);
     }
 
     @EventHandler(ignoreCancelled = true)
@@ -181,26 +184,20 @@ public final class DifficultyListener implements Listener {
     @EventHandler(ignoreCancelled = true)
     public void onPortal(PlayerPortalEvent event) {
         if (!plugin.isPhaseActive(40)) return;
+        if (event.isCancelled()) return;
+        // Clasificación custom pública acordada (paso 6 la implementa en ReservaPortalController).
+        // Se excluyen ambos extremos antes de cualquier daño/transformación.
+        if (isCustomPortal(event.getFrom()) || (event.getTo() != null && isCustomPortal(event.getTo()))) return;
+        // Solo portales Nether auténticos: nunca End ni frames aunque otro listener aún no haya cancelado.
+        if (!isNetherPortalCause(event.getCause())) return;
         event.getPlayer().damage(4.0);
         Block centre = event.getFrom().getBlock();
         for (int x = -2; x <= 2; x++) for (int z = -2; z <= 2; z++) {
             Block block = centre.getRelative(x, 0, z);
-            if (block.getType().isSolid()) block.setType(Material.NETHERRACK);
+            if (block.getType().isSolid() && !isEndProtected(block.getType())) block.setType(Material.NETHERRACK);
             Block above = block.getRelative(0, 1, 0);
             if (above.getType().isAir() && chance(0.35)) above.setType(Material.FIRE);
         }
-    }
-
-    @EventHandler(ignoreCancelled = true)
-    public void onFireFade(BlockFadeEvent event) {
-        if (plugin.isPhaseActive(40) && event.getBlock().getType() == Material.FIRE) event.setCancelled(true);
-    }
-
-    @EventHandler(ignoreCancelled = true)
-    public void onFireSpread(BlockSpreadEvent event) {
-        if (!plugin.isPhaseActive(40) || event.getSource().getType() != Material.FIRE || !chance(0.66)) return;
-        Block fire = event.getBlock();
-        for (Block adjacent : List.of(fire.getRelative(1, 0, 0), fire.getRelative(-1, 0, 0), fire.getRelative(0, 0, 1), fire.getRelative(0, 0, -1))) if (adjacent.getType().isAir() && chance(0.45)) adjacent.setType(Material.FIRE);
     }
 
     @EventHandler(ignoreCancelled = true)
@@ -241,8 +238,9 @@ public final class DifficultyListener implements Listener {
         Player player = event.getPlayer();
         if (event.getItem().getType() == Material.GOLDEN_APPLE && plugin.isPhaseActive(70)) {
             if (player.hasCooldown(Material.GOLDEN_APPLE)) { event.setCancelled(true); return; }
-            player.setCooldown(Material.GOLDEN_APPLE, 2400);
-            if (chance(0.05)) { event.setCancelled(true); player.addPotionEffect(new PotionEffect(PotionEffectType.HUNGER, 600, 2)); player.addPotionEffect(new PotionEffect(PotionEffectType.NAUSEA, 600, 0)); }
+            player.setCooldown(Material.GOLDEN_APPLE, GOLDEN_APPLE_COOLDOWN_TICKS);
+            // Sin HUNGER amplifier 2: solo NAUSEA residual. Hambre vanilla y sprint de fases intactos.
+              if (chance(0.05)) { event.setCancelled(true); player.addPotionEffect(new PotionEffect(PotionEffectType.NAUSEA, 600, 0)); }
         }
         if (plugin.isPhaseActive(90) && event.getItem().getType().isEdible()) {
             int before = player.getFoodLevel();
@@ -283,6 +281,40 @@ public final class DifficultyListener implements Listener {
         gear.setChestplate(new ItemStack(Material.valueOf(prefix + "CHESTPLATE")));
         gear.setLeggings(new ItemStack(Material.valueOf(prefix + "LEGGINGS")));
         gear.setBoots(new ItemStack(Material.valueOf(prefix + "BOOTS")));
+    }
+
+    static final int GOLDEN_APPLE_COOLDOWN_TICKS = 160;
+
+    static boolean isAxe(Material material) {
+        if (material == null) return false;
+        // Tag.ITEMS_AXES si existe en API objetivo; fallback por nombre cubre todas las hachas sin incluir picos.
+        return material.name().endsWith("_AXE");
+    }
+
+    static boolean isEndProtected(Material material) {
+        return material == Material.END_PORTAL || material == Material.END_GATEWAY
+                || material == Material.END_PORTAL_FRAME;
+    }
+
+    static boolean isNetherPortalCause(PlayerTeleportEvent.TeleportCause cause) {
+        return cause == PlayerTeleportEvent.TeleportCause.NETHER_PORTAL;
+    }
+
+    private boolean isCustomPortal(org.bukkit.Location location) {
+        if (location == null || location.getWorld() == null) return false;
+        try {
+            ReservaPortalController controller = plugin.reservaPortal();
+            if (controller == null) return false;
+            try {
+                java.lang.reflect.Method method = controller.getClass().getMethod("isCustomPortal", org.bukkit.Location.class);
+                Object result = method.invoke(controller, location);
+                if (result instanceof Boolean value) return value;
+            } catch (NoSuchMethodException missing) {
+                // Paso 6 aún la implementa: sin clasificación disponible no se excluye aquí.
+            }
+        } catch (Exception ignored) {
+        }
+        return false;
     }
 
     private void targetClosestPlayer(Monster mob, double range) {

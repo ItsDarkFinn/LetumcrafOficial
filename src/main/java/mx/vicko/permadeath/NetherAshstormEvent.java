@@ -42,8 +42,17 @@ public final class NetherAshstormEvent {
     }
 
     public void shutdown() {
-        if (schedulerTask != null) schedulerTask.cancel();
+        if (schedulerTask != null) { schedulerTask.cancel(); schedulerTask = null; }
         if (activeStorm != null) finish(false);
+    }
+
+    /** Bloque 4 — tras el sellado no hay Tormenta de ceniza (ni auto ni en curso). */
+    private boolean seasonEnded() {
+        try {
+            return plugin.seasonService() != null && plugin.seasonService().isSeasonEnded();
+        } catch (RuntimeException exception) {
+            return false;
+        }
     }
 
     public String status() {
@@ -71,13 +80,24 @@ public final class NetherAshstormEvent {
     }
 
     private void checkAutomaticStart() {
+        if (seasonEnded()) return;
         if (activeStorm != null || !plugin.getConfig().getBoolean("random-events.enabled", true)
                 || !plugin.getConfig().getBoolean("random-events.nether.ashstorm.enabled", true)) return;
         int day = plugin.days().getCurrentDay();
         int startDay = Math.max(1, plugin.getConfig().getInt("random-events.nether.start-day", START_DAY));
+        if (plugin.seasonService() != null) startDay = plugin.seasonService().mapLegacyDay(startDay);
         if (day < startDay || day > FINAL_DAY || lastAttemptDay == day) return;
         List<Player> candidates = eligibleNetherPlayers();
         if (candidates.isEmpty()) return;
+        // Gate único de temporada (automático); /pd evento ceniza iniciar lo omite (prueba manual).
+        try {
+            SeasonService seasons = plugin.seasonService();
+            if (seasons != null && !seasons.passesGateForPlayers(candidates)) {
+                lastAttemptDay = day;
+                return;
+            }
+        } catch (RuntimeException ignored) {
+        }
 
         int lastEventDay = plugin.getConfig().getInt("random-events.nether.last-event-day", 0);
         int cooldown = Math.max(1, plugin.getConfig().getInt("random-events.nether.cooldown-days", 3));
@@ -107,6 +127,8 @@ public final class NetherAshstormEvent {
 
     private void tickStorm() {
         if (activeStorm == null) return;
+        // Bloque 4 — tormenta en curso al sellar: se disipa sin más daño.
+        if (seasonEnded()) { finish(false); return; }
         if (System.currentTimeMillis() >= activeStorm.endsAtMillis) {
             finish(true);
             return;

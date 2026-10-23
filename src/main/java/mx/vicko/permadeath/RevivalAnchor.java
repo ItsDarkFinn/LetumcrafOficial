@@ -81,8 +81,9 @@ public final class RevivalAnchor implements Listener {
 
     @EventHandler
     public void onPrepareCraft(PrepareItemCraftEvent event) {
+        int effectiveAnchorDay = plugin.seasonService() != null ? plugin.seasonService().mapLegacyDay(UNLOCK_DAY) : UNLOCK_DAY;
         if (event.getRecipe() instanceof Keyed keyed && keyed.getKey().equals(recipeKey)
-                && plugin.days().getCurrentDay() < UNLOCK_DAY) {
+                && plugin.days().getCurrentDay() < effectiveAnchorDay) {
             event.getInventory().setResult(null);
         }
     }
@@ -95,7 +96,8 @@ public final class RevivalAnchor implements Listener {
             player.getInventory().clear();
             player.getEnderChest().clear();
             if (!plugin.getServer().getWorlds().isEmpty()) {
-                player.teleport(plugin.getServer().getWorlds().getFirst().getSpawnLocation());
+                var spawn = plugin.getServer().getWorlds().getFirst().getSpawnLocation().clone();
+                player.teleport(spawn);
             }
             player.sendMessage(ChatColor.LIGHT_PURPLE + "Has vuelto a la partida. Tu inventario se reinició.");
         });

@@ -23,6 +23,14 @@ public final class PermadeathPlugin extends JavaPlugin {
     private CursedStriderController cursedStriderController;
     private ReservaPodrida reservaPodrida;
     private ReservaPortalController reservaPortalController;
+    private PhaseTasks phaseTasks;
+    private SeasonService seasonService;
+    private SeasonEconomyService seasonEconomyService;
+    private SeasonAltar seasonAltar;
+    private SacrificeListener sacrificeListener;
+    private SolarFallEvent solarFallEvent;
+    private PitController pitController;
+    private ChispaItem chispaItem;
 
     @Override
     public void onEnable() {
@@ -33,6 +41,7 @@ public final class PermadeathPlugin extends JavaPlugin {
         getConfig().addDefault("reserve.chest-chance-per-chunk", 0.16);
         getConfig().addDefault("reserve.portal.enabled", true);
         getConfig().addDefault("reserve.portal.search-radius-blocks", 128);
+        getConfig().addDefault("season.pit-duration-minutes", 12);
         String configuredPrefix = getConfig().getString("messages.prefix", "");
         if (configuredPrefix.contains("Permadeath")) {
             getConfig().set("messages.prefix", configuredPrefix.replace("Permadeath", "LetumcrafOficial"));
@@ -43,11 +52,14 @@ public final class PermadeathPlugin extends JavaPlugin {
         dayManager.initialize();
         this.deathRegistry = new DeathRegistry(this);
         deathRegistry.load();
+        // Fábricas de items antes de SeasonService.start(): retryPendingRewards entrega Esquirlas.
+        this.eclipseCoreItem = new EclipseCoreItem();
+        this.eclipseShardItem = new EclipseShardItem();
+        this.seasonService = new SeasonService(this);
+        seasonService.start();
         this.deathLocationMarker = new DeathLocationMarker(this);
         this.revivalAnchor = new RevivalAnchor(this);
         revivalAnchor.register();
-        this.eclipseCoreItem = new EclipseCoreItem();
-        this.eclipseShardItem = new EclipseShardItem();
         this.resurrectionSealItem = new ResurrectionSealItem(this);
         resurrectionSealItem.register();
         this.ritualPenaltyManager = new RitualPenaltyManager(this);
@@ -69,11 +81,27 @@ public final class PermadeathPlugin extends JavaPlugin {
 
         getServer().getPluginManager().registerEvents(new PermanentDeathListener(this), this);
         getServer().getPluginManager().registerEvents(new DifficultyListener(this), this);
+        getServer().getPluginManager().registerEvents(new SeasonListener(this), this);
         this.paleWardenController = new PaleWardenController(this);
         paleWardenController.start();
         this.endThreatController = new EndThreatController(this);
         endThreatController.start();
-        new PhaseTasks(this).start();
+        this.phaseTasks = new PhaseTasks(this);
+        phaseTasks.start();
+        this.seasonEconomyService = new SeasonEconomyService(this);
+        this.seasonAltar = new SeasonAltar(this);
+        this.sacrificeListener = new SacrificeListener(this);
+        this.chispaItem = new ChispaItem(this);
+        this.pitController = new PitController(this);
+        pitController.register();
+        this.solarFallEvent = new SolarFallEvent(this);
+        getServer().getPluginManager().registerEvents(sacrificeListener, this);
+        getServer().getPluginManager().registerEvents(seasonAltar, this);
+        sacrificeListener.start();
+        try {
+            solarFallEvent.checkAndRun(seasonService.currentDay());
+        } catch (RuntimeException ignored) {
+        }
 
         PluginCommand command = getCommand("permadeath");
         if (command == null) {
@@ -88,15 +116,26 @@ public final class PermadeathPlugin extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        if (sacrificeListener != null) sacrificeListener.stop();
+        if (seasonService != null) seasonService.shutdown();
         if (resurrectionRitual != null) resurrectionRitual.cancelAllForShutdown();
         if (nightHuntEvent != null) nightHuntEvent.shutdown();
         if (caravanEvent != null) caravanEvent.shutdown();
         if (netherAshstormEvent != null) netherAshstormEvent.shutdown();
         if (fortressHuntEvent != null) fortressHuntEvent.shutdown();
         if (cursedStriderController != null) cursedStriderController.shutdown();
+        if (pitController != null) pitController.stop();
         if (reservaPodrida != null) reservaPodrida.shutdown();
         if (reservaPortalController != null) reservaPortalController.shutdown();
+        if (phaseTasks != null) phaseTasks.stop();
         if (ritualPenaltyManager != null) ritualPenaltyManager.clearOnlineModifiers();
+    }
+
+    @Override
+    public void reloadConfig() {
+        super.reloadConfig();
+        if (endThreatController != null) endThreatController.onConfigReload();
+        if (seasonService != null) seasonService.reload();
     }
 
     public DayManager days() {
@@ -104,7 +143,36 @@ public final class PermadeathPlugin extends JavaPlugin {
     }
 
     public boolean isPhaseActive(int day) {
+        if (seasonService != null) return seasonService.isPhaseActive(day);
         return dayManager.getCurrentDay() >= day && getConfig().getBoolean("phases." + day + ".enabled", true);
+    }
+
+    public SeasonService seasonService() {
+        return seasonService;
+    }
+
+    public SeasonEconomyService seasonEconomy() {
+        return seasonEconomyService;
+    }
+
+    public SeasonAltar seasonAltar() {
+        return seasonAltar;
+    }
+
+    public SacrificeListener sacrificeListener() {
+        return sacrificeListener;
+    }
+
+    public PitController pitController() {
+        return pitController;
+    }
+
+    public ChispaItem chispaItem() {
+        return chispaItem;
+    }
+
+    public SolarFallEvent solarFallEvent() {
+        return solarFallEvent;
     }
 
     public DeathRegistry deaths() {
@@ -158,6 +226,8 @@ public final class PermadeathPlugin extends JavaPlugin {
     public ReservaPodrida reservaPodrida() { return reservaPodrida; }
 
     public ReservaPortalController reservaPortal() { return reservaPortalController; }
+
+    public PhaseTasks phaseTasks() { return phaseTasks; }
 
     public void setPhaseEnabled(int day, boolean enabled) {
         getConfig().set("phases." + day + ".enabled", enabled);

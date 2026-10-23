@@ -1,7 +1,9 @@
 package mx.vicko.permadeath;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -27,6 +29,7 @@ public final class ReservaPortalController implements Listener {
     private final PermadeathPlugin plugin;
     private final ReservaPodrida reserve;
     private final Map<UUID, Long> cooldowns = new HashMap<>();
+    private final Set<UUID> pendingTeleports = new HashSet<>();
     private final BukkitTask setupTask;
 
     public ReservaPortalController(PermadeathPlugin plugin, ReservaPodrida reserve) {
@@ -39,6 +42,7 @@ public final class ReservaPortalController implements Listener {
     public void shutdown() {
         setupTask.cancel();
         cooldowns.clear();
+        pendingTeleports.clear();
     }
 
     public void ensureReserveExit(World world) {
@@ -60,7 +64,8 @@ public final class ReservaPortalController implements Listener {
     private void ensureEntrance() {
         if (!plugin.getConfig().getBoolean(ROOT + ".enabled", true)) return;
         int unlockDay = plugin.getConfig().getInt("reserve.unlock-day", ReservaPodrida.UNLOCK_DAY);
-        boolean unlocked = plugin.days().getCurrentDay() >= unlockDay;
+        int effectiveUnlock = plugin.seasonService() != null ? plugin.seasonService().effectiveUnlockDay(unlockDay) : unlockDay;
+        boolean unlocked = plugin.days().getCurrentDay() >= effectiveUnlock;
         String worldName = plugin.getConfig().getString(ROOT + ".world");
         World world = worldName == null ? Bukkit.getWorlds().stream()
                 .filter(candidate -> candidate.getEnvironment() == World.Environment.NORMAL)
@@ -86,6 +91,7 @@ public final class ReservaPortalController implements Listener {
             plugin.getConfig().set(ROOT + ".structure-repaired", true);
             plugin.saveConfig();
             plugin.getLogger().info("Ruina de entrada a la Reserva revelada en el día " + unlockDay + ".");
+            announceEntrance(world, site.getBlockX(), site.getBlockY(), site.getBlockZ());
             return;
         }
 
@@ -98,6 +104,7 @@ public final class ReservaPortalController implements Listener {
                 hideEntrance(world, x, y, z);
                 plugin.getConfig().set(ROOT + ".visible", false);
                 plugin.getConfig().set(ROOT + ".structure-repaired", false);
+                plugin.getConfig().set(ROOT + ".announced", false);
                 plugin.saveConfig();
                 plugin.getLogger().info("La ruina de la Reserva quedó oculta hasta el día " + unlockDay + ".");
             }
@@ -109,10 +116,27 @@ public final class ReservaPortalController implements Listener {
             plugin.getConfig().set(ROOT + ".structure-repaired", true);
             plugin.saveConfig();
             plugin.getLogger().info("La ruina de entrada a la Reserva apareció al desbloquearse el día " + unlockDay + ".");
+            announceEntrance(world, x, y, z);
         } else if (!plugin.getConfig().getBoolean(ROOT + ".structure-repaired", false)) {
             repairEntrance(world, x, y, z);
             plugin.getConfig().set(ROOT + ".structure-repaired", true);
             plugin.saveConfig();
+        }
+    }
+
+    /**
+     * Announces a (re)appeared entrance exactly once per unlock cycle: chat + title,
+     * only after the structure was actually built. The flag resets when the ruin hides.
+     */
+    private void announceEntrance(World world, int x, int y, int z) {
+        if (plugin.getConfig().getBoolean(ROOT + ".announced", false)) return;
+        plugin.getConfig().set(ROOT + ".announced", true);
+        plugin.saveConfig();
+        String chat = color("&2Una ruina antigua ha emergido (" + x + ", " + y + ", " + z
+                + "). &aLa Reserva Podrida aguarda.");
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            player.sendMessage(chat);
+            player.sendTitle(color("&2La Reserva Podrida"), color("&7Una entrada antigua ha aparecido"), 10, 70, 20);
         }
     }
 
@@ -294,13 +318,29 @@ public final class ReservaPortalController implements Listener {
     public void onMove(PlayerMoveEvent event) {
         Location from = event.getFrom();
         Location to = event.getTo();
-        if (to == null || from.getBlockX() == to.getBlockX() && from.getBlockY() == to.getBlockY()
-                && from.getBlockZ() == to.getBlockZ()) return;
+        if (to == null) return;
+        // Same-block steps still cross the door plane: only ignore pure look-around.
+        if (from.getX() == to.getX() && from.getY() == to.getY() && from.getZ() == to.getZ()) return;
         Player player = event.getPlayer();
+        if (pendingTeleports.contains(player.getUniqueId()) || isOnCooldown(player)) return;
         if (reserve.isReserve(player.getWorld())) {
             // The generated world's return arch is placed beside its spawn on first entry.
             if (isReserveExit(to) && !isReserveExit(from)) {
-                if (takeCooldown(player)) player.sendMessage(color(reserve.exit(player)));
+                pendingTeleports.add(player.getUniqueId());
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    try {
+                        String error = reserve.exit(player);
+                        if (error != null) {
+                            player.sendMessage(color(error));
+                            setCooldown(player, 500L);
+                        } else {
+                            player.sendMessage(color("&aSaliste de la Reserva Podrida."));
+                            setCooldown(player, 2500L);
+                        }
+                    } finally {
+                        pendingTeleports.remove(player.getUniqueId());
+                    }
+                });
             }
             return;
         }
@@ -312,29 +352,44 @@ public final class ReservaPortalController implements Listener {
         int y = plugin.getConfig().getInt(ROOT + ".y");
         int z = plugin.getConfig().getInt(ROOT + ".z");
         if (!insideDoor(to, entranceWorld, x, y, z) || insideDoor(from, entranceWorld, x, y, z)) return;
-        if (!takeCooldown(player)) return;
         int unlockDay = plugin.getConfig().getInt("reserve.unlock-day", ReservaPodrida.UNLOCK_DAY);
-        if (plugin.days().getCurrentDay() < unlockDay && !player.hasPermission("permadeath.admin")) {
-            player.sendMessage(color("&cLa entrada permanece sellada. Se desbloquea el día " + unlockDay + "."));
+        int effectiveUnlock = plugin.seasonService() != null ? plugin.seasonService().effectiveUnlockDay(unlockDay) : unlockDay;
+        if (plugin.days().getCurrentDay() < effectiveUnlock && !player.hasPermission("permadeath.admin")) {
+            player.sendMessage(color("&cLa entrada permanece sellada. Se desbloquea el día " + effectiveUnlock + "."));
+            setCooldown(player, 2500L);
             return;
         }
         Location returnPoint = new Location(entranceWorld, x + 0.5, y + 1.0, z + 3.5, 180.0f, 0.0f);
+        pendingTeleports.add(player.getUniqueId());
         Bukkit.getScheduler().runTask(plugin, () -> {
-            if (player.isOnline()) {
-                String error = reserve.enter(player, returnPoint);
-                if (error != null) player.sendMessage(color(error));
+            try {
+                if (player.isOnline()) {
+                    String error = reserve.enter(player, returnPoint);
+                    if (error != null) {
+                        player.sendMessage(color(error));
+                        setCooldown(player, 500L);
+                    } else setCooldown(player, 2500L);
+                }
+            } finally {
+                pendingTeleports.remove(player.getUniqueId());
             }
         });
     }
 
     @EventHandler(ignoreCancelled = true)
     public void onVanillaPortal(PlayerPortalEvent event) {
+        // Cancel vanilla derivation for either custom end before foreign transforms or damage apply.
         Location from = event.getFrom();
         Location to = event.getTo();
-        if (isCustomDoor(from) || to != null && isCustomDoor(to)) event.setCancelled(true);
+        if (isCustomPortal(from) || to != null && isCustomPortal(to)) event.setCancelled(true);
     }
 
-    private boolean isCustomDoor(Location location) {
+    /**
+     * Pure classifier for custom Reserve portals (overworld entrance volume and Reserve
+     * exit volume). No side effects: safe to call from other listeners (DifficultyListener
+     * resolves it by reflection for its Nether/End guards).
+     */
+    public boolean isCustomPortal(Location location) {
         if (location == null || location.getWorld() == null) return false;
         if (reserve.isReserve(location.getWorld())) return isReserveExit(location);
         if (!plugin.getConfig().getBoolean(ROOT + ".generated", false)
@@ -344,7 +399,12 @@ public final class ReservaPortalController implements Listener {
                 plugin.getConfig().getInt(ROOT + ".y"), plugin.getConfig().getInt(ROOT + ".z"));
     }
 
+    private boolean isCustomDoor(Location location) {
+        return isCustomPortal(location);
+    }
+
     private boolean isReserveExit(Location location) {
+        if (location == null || !reserve.isReserve(location.getWorld())) return false;
         if (!plugin.getConfig().getBoolean("reserve.portal.exit-generated", false)) return false;
         int x = plugin.getConfig().getInt("reserve.portal.exit-x");
         int y = plugin.getConfig().getInt("reserve.portal.exit-y");
@@ -354,12 +414,13 @@ public final class ReservaPortalController implements Listener {
                 && Math.abs(location.getZ() - (z + 0.5)) <= TRIGGER_DEPTH;
     }
 
-    private boolean takeCooldown(Player player) {
-        long now = System.currentTimeMillis();
+    private boolean isOnCooldown(Player player) {
         Long until = cooldowns.get(player.getUniqueId());
-        if (until != null && until > now) return false;
-        cooldowns.put(player.getUniqueId(), now + 2500L);
-        return true;
+        return until != null && until > System.currentTimeMillis();
+    }
+
+    private void setCooldown(Player player, long millis) {
+        cooldowns.put(player.getUniqueId(), System.currentTimeMillis() + millis);
     }
 
     private String color(String input) {

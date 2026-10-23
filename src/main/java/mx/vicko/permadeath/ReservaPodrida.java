@@ -1,5 +1,6 @@
 package mx.vicko.permadeath;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.HashMap;
 import java.util.Map;
@@ -37,10 +38,12 @@ import org.bukkit.event.entity.CreatureSpawnEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDeathEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
+import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.generator.BiomeProvider;
 import org.bukkit.generator.ChunkGenerator;
 import org.bukkit.generator.WorldInfo;
+import org.bukkit.block.DoubleChest;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.EquipmentSlotGroup;
 import org.bukkit.inventory.ItemStack;
@@ -100,11 +103,34 @@ public final class ReservaPodrida implements Listener {
     }
 
     public void shutdown() {
-        atmosphereTask.cancel();
+        if (atmosphereTask != null) { atmosphereTask.cancel(); }
+    }
+
+    /** Bloque 4 — tras el sellado las esporas no dañan a los conectados. */
+    private boolean seasonEnded() {
+        try {
+            return plugin.seasonService() != null && plugin.seasonService().isSeasonEnded();
+        } catch (RuntimeException exception) {
+            return false;
+        }
     }
 
     public boolean isReserve(World world) {
         return world != null && world.getName().startsWith(LEGACY_WORLD_PREFIX);
+    }
+
+    /**
+     * Bloque 3 — Mundo Reserva existente para el recinto de La Fosa.
+     * Solo lectura: devuelve el mundo si ya está cargado, o null.
+     * Nunca crea ni regenera nada (sin tocar mundos).
+     */
+    public World reserveWorld() {
+        for (World world : Bukkit.getWorlds()) {
+            if (isReserve(world)) {
+                return world;
+            }
+        }
+        return null;
     }
 
     public String enter(Player player) {
@@ -116,14 +142,19 @@ public final class ReservaPodrida implements Listener {
             return "&cLa Reserva Podrida está desactivada.";
         }
         int unlockDay = plugin.getConfig().getInt("reserve.unlock-day", UNLOCK_DAY);
-        if (plugin.days().getCurrentDay() < unlockDay && !player.hasPermission("permadeath.admin")) {
-            return "&cLa Reserva Podrida se desbloquea en el día " + unlockDay + ".";
+        int effectiveUnlock = plugin.seasonService() != null ? plugin.seasonService().effectiveUnlockDay(unlockDay) : unlockDay;
+        if (plugin.days().getCurrentDay() < effectiveUnlock && !player.hasPermission("permadeath.admin")) {
+            return "&cLa Reserva Podrida se desbloquea en el día " + effectiveUnlock + ".";
+        }
+        if (isReserve(player.getWorld())) {
+              return "&cYa estás en la Reserva Podrida.";
         }
         World world = getOrCreateWorld();
         if (world == null) return "&cNo se pudo crear el mundo de la Reserva. Revisa la consola.";
         if (plugin.reservaPortal() != null) plugin.reservaPortal().ensureReserveExit(world);
 
         Location from = returnLocation == null ? player.getLocation() : returnLocation;
+        if (from.getWorld() == null) from = player.getLocation();
         PersistentDataContainer data = player.getPersistentDataContainer();
         data.set(returnWorldKey, PersistentDataType.STRING, from.getWorld().getName());
         data.set(returnXKey, PersistentDataType.DOUBLE, from.getX());
@@ -134,7 +165,13 @@ public final class ReservaPodrida implements Listener {
 
         Location spawn = world.getSpawnLocation();
         spawn.setY(ReservaGenerator.floorHeight(0, 0) + 1.0);
-        player.teleport(spawn);
+          // Keep the incoming orientation: no forced camera reset on entry.
+        spawn.setYaw(from.getYaw());
+        spawn.setPitch(from.getPitch());
+        if (!player.teleport(spawn)) {
+            clearReturnData(player);
+            return "&cNo se pudo entrar a la Reserva Podrida. Inténtalo de nuevo.";
+        }
         player.sendMessage(color("&2Has entrado en &aLa Reserva Podrida&2. El aire está contaminado."));
         player.sendMessage(color("&7Máscara antigás y un cartucho te protegen de las esporas durante 10 minutos."));
         return null;
@@ -149,20 +186,46 @@ public final class ReservaPodrida implements Listener {
         PersistentDataContainer data = player.getPersistentDataContainer();
         String worldName = data.get(returnWorldKey, PersistentDataType.STRING);
         World world = worldName == null ? null : Bukkit.getWorld(worldName);
-        if (world == null) world = Bukkit.getWorlds().getFirst();
+        if (world == null) world = fallbackReturnWorld();
         double x = data.getOrDefault(returnXKey, PersistentDataType.DOUBLE, world.getSpawnLocation().getX());
         double y = data.getOrDefault(returnYKey, PersistentDataType.DOUBLE, world.getSpawnLocation().getY());
         double z = data.getOrDefault(returnZKey, PersistentDataType.DOUBLE, world.getSpawnLocation().getZ());
         float yaw = data.getOrDefault(returnYawKey, PersistentDataType.FLOAT, 0.0f);
         float pitch = data.getOrDefault(returnPitchKey, PersistentDataType.FLOAT, 0.0f);
+        Location destination = new Location(world, x, y, z, yaw, pitch);
+        world.getChunkAt(destination).load(true);
+        if (!isSafeDestination(destination)) destination = world.getSpawnLocation();
+        if (!player.teleport(destination)) {
+              return "&cNo se pudo salir de la Reserva. Tus datos de retorno se conservan.";
+        }
+        clearReturnData(player);
+        return null;
+    }
+
+    private World fallbackReturnWorld() {
+        // Never bounce into the Nether: prefer a loaded NORMAL world.
+        World normal = Bukkit.getWorlds().stream()
+                .filter(candidate -> candidate.getEnvironment() == World.Environment.NORMAL)
+                .findFirst().orElse(null);
+        return normal != null ? normal : Bukkit.getWorlds().getFirst();
+    }
+
+    private boolean isSafeDestination(Location destination) {
+        Block feet = destination.getBlock();
+        Block head = destination.clone().add(0.0, 1.0, 0.0).getBlock();
+        if (feet.getType() == Material.LAVA || head.getType() == Material.LAVA
+                || feet.getType() == Material.FIRE || head.getType() == Material.FIRE) return false;
+        return !(feet.getType().isSolid() && head.getType().isSolid());
+    }
+
+    private void clearReturnData(Player player) {
+        PersistentDataContainer data = player.getPersistentDataContainer();
         data.remove(returnWorldKey);
         data.remove(returnXKey);
         data.remove(returnYKey);
         data.remove(returnZKey);
         data.remove(returnYawKey);
         data.remove(returnPitchKey);
-        player.teleport(new Location(world, x, y, z, yaw, pitch));
-        return "&aSaliste de la Reserva Podrida.";
     }
 
     public ItemStack createFilter(int amount) {
@@ -177,7 +240,8 @@ public final class ReservaPodrida implements Listener {
         return item;
     }
 
-    private ItemStack createMask() {
+    /** Public factory for /pd mascara (MiniMax C): gas mask with diamond-helmet stats. */
+    public ItemStack createMask() {
         ItemStack item = new ItemStack(Material.TURTLE_HELMET);
         ItemMeta meta = item.getItemMeta();
         meta.setDisplayName(color("&2Máscara Antigás"));
@@ -208,6 +272,8 @@ public final class ReservaPodrida implements Listener {
                 Material.HONEYCOMB, Material.HONEYCOMB_BLOCK));
         plugin.getServer().removeRecipe(maskRecipeKey);
         plugin.getServer().addRecipe(recipe);
+          validateRecipe(maskRecipeKey, "máscara");
+        discoverRecipe(maskRecipeKey);
     }
 
     private void registerFilterRecipe() {
@@ -218,6 +284,27 @@ public final class ReservaPodrida implements Listener {
         recipe.setIngredient('P', Material.PAPER);
         plugin.getServer().removeRecipe(filterRecipeKey);
         plugin.getServer().addRecipe(recipe);
+          validateRecipe(filterRecipeKey, "cartucho");
+        discoverRecipe(filterRecipeKey);
+    }
+
+    private void validateRecipe(NamespacedKey key, String label) {
+        if (plugin.getServer().getRecipe(key) == null) {
+            plugin.getLogger().warning("No se pudo registrar la receta de " + label + " (" + key + ").");
+        }
+    }
+
+    private void discoverRecipe(NamespacedKey key) {
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            player.discoverRecipe(key);
+        }
+    }
+
+    @EventHandler
+    public void onJoinDiscover(PlayerJoinEvent event) {
+        // The recipe book only shows discovered recipes: grant both on every join.
+        event.getPlayer().discoverRecipe(filterRecipeKey);
+        event.getPlayer().discoverRecipe(maskRecipeKey);
     }
 
     public String giveFilter(Player player, int amount) {
@@ -245,6 +332,7 @@ public final class ReservaPodrida implements Listener {
     }
 
     private void tickAtmosphere() {
+        if (seasonEnded()) return;
         long now = System.currentTimeMillis();
         for (Player player : Bukkit.getOnlinePlayers()) {
             if (!isReserve(player.getWorld())) {
@@ -306,9 +394,28 @@ public final class ReservaPodrida implements Listener {
         return false;
     }
 
+    /** Rango vertical del barrido de cofres de ruina (limite superior exclusivo). Cubre chestY = floor+1 (30..60). */
+    static final int RESERVE_CHEST_MIN_Y = 30;
+    static final int RESERVE_CHEST_MAX_Y = 95;
+
+    /** Indica si una Y entra en el barrido de cofres (puro, testeable sin servidor). */
+    static boolean isReserveChestScanY(int y) {
+        return y >= RESERVE_CHEST_MIN_Y && y < RESERVE_CHEST_MAX_Y;
+    }
+
+    /**
+     * Regla unica de relleno: el cofre se rellena UNA SOLA VEZ.
+     * Solo un cofre sin bandera (null), vacio y en ruina identificable puede rellenarse (pasa a 1).
+     * Un cofre con bandera 0 (saqueado) o 1 (rellenado una vez) nunca se vuelve a rellenar.
+     */
+    static boolean shouldFillReserveChest(Byte flag, boolean inventoryEmpty, boolean likelyRuinChest) {
+        return flag == null && inventoryEmpty && likelyRuinChest;
+    }
+
     @EventHandler
     public void onNewChunk(ChunkLoadEvent event) {
-        if (!isReserve(event.getWorld()) || !event.isNewChunk()) return;
+        if (!isReserve(event.getWorld())) return;
+        // Tambien cubre mundos ya generados: coste acotado a este chunk, sin recorrer el mundo.
         Chunk chunk = event.getChunk();
         Bukkit.getScheduler().runTask(plugin, () -> markGeneratedChests(chunk));
     }
@@ -316,20 +423,25 @@ public final class ReservaPodrida implements Listener {
     private void markGeneratedChests(Chunk chunk) {
         for (int x = 0; x < 16; x++) {
             for (int z = 0; z < 16; z++) {
-                for (int y = 30; y < 95; y++) {
+                for (int y = RESERVE_CHEST_MIN_Y; y < RESERVE_CHEST_MAX_Y; y++) {
                     Block block = chunk.getBlock(x, y, z);
                     if (block.getType() != Material.CHEST) continue;
                     BlockState state = block.getState();
                     if (!(state instanceof Chest chest)) continue;
-                    // Fill the ruin chest as soon as the structure's chunk is generated.
+                    // Never overwrite a live inventory with a stale snapshot: flagged chests are done.
+                    if (chest.getPersistentDataContainer().has(chestLootKey, PersistentDataType.BYTE)) continue;
+                    // Persist the flag first, then fill the LIVE inventory: never update with a stale snapshot.
                     chest.getPersistentDataContainer().set(chestLootKey, PersistentDataType.BYTE, (byte) 1);
-                    chest.update(true, false);
-                    BlockState refreshed = block.getState();
-                    if (!(refreshed instanceof Chest liveChest)) continue;
-                    Inventory inventory = liveChest.getBlockInventory();
-                    if (inventory.isEmpty()) fillChest(inventory);
-                    liveChest.getPersistentDataContainer().set(chestLootKey, PersistentDataType.BYTE, (byte) 0);
-                    liveChest.update(true, false);
+                    if (!chest.update(true, false)) continue;
+                    BlockState fresh = block.getState();
+                    if (!(fresh instanceof Chest live)) continue;
+                    Inventory inventory = live.getBlockInventory();
+                    if (!inventory.isEmpty()) {
+                          // Unexpected loot on a fresh ruin: keep world/player items, flag already set.
+                          continue;
+                    }
+                      fillChest(inventory);
+                      // No further update: the live inventory is already persisted.
                 }
             }
         }
@@ -337,14 +449,63 @@ public final class ReservaPodrida implements Listener {
 
     @EventHandler(ignoreCancelled = true)
     public void onReserveChestOpen(InventoryOpenEvent event) {
-        if (!(event.getInventory().getHolder() instanceof Chest chest) || !isReserve(chest.getWorld())) return;
-        PersistentDataContainer data = chest.getPersistentDataContainer();
-        // Recovery path for old/pre-existing ruins: never replace items a player stored.
+        List<Chest> chests = reserveChests(event.getInventory());
+        if (chests.isEmpty()) return;
+        // Regla unica: el cofre se rellena UNA SOLA VEZ. Si cualquier lado ya fue
+        // rellenado (1) o saqueado (0), nunca se vuelve a rellenar.
+        boolean anyMarked = false;
+        for (Chest chest : chests) {
+            Byte flag = chest.getPersistentDataContainer().get(chestLootKey, PersistentDataType.BYTE);
+            if (flag != null) { anyMarked = true; break; }
+        }
+        if (anyMarked) {
+            // Una vez saqueado, nunca vuelve a aparecer loot: marca 0 (saqueado) si quedo vacio.
+            if (event.getInventory().isEmpty()) {
+                for (Chest chest : chests) setChestFlag(chest, (byte) 0);
+            }
+            return;
+        }
+        // Sin bandera: solo ruinas identificables, nunca cofres colocados por jugadores.
         if (!event.getInventory().isEmpty()) return;
-        data.set(chestLootKey, PersistentDataType.BYTE, (byte) 1);
+        if (!isLikelyRuinChest(chests.get(0).getBlock())) return;
         fillChest(event.getInventory());
-        data.set(chestLootKey, PersistentDataType.BYTE, (byte) 0);
-        chest.update(true, false);
+        for (Chest chest : chests) setChestFlag(chest, (byte) 1);
+    }
+
+    /** Collects the reserve chest block states behind an opened inventory (single or double). */
+    private List<Chest> reserveChests(Inventory inventory) {
+        List<Chest> chests = new ArrayList<>();
+        if (inventory.getHolder() instanceof Chest chest) {
+            if (isReserve(chest.getWorld())) chests.add(chest);
+        } else if (inventory.getHolder() instanceof DoubleChest pair) {
+            if (pair.getLeftSide() instanceof Chest left && isReserve(left.getWorld())) chests.add(left);
+            if (pair.getRightSide() instanceof Chest right && isReserve(right.getWorld())) chests.add(right);
+        }
+        return chests;
+    }
+
+    private void setChestFlag(Chest chest, byte value) {
+        BlockState fresh = chest.getBlock().getState();
+        if (!(fresh instanceof Chest live)) return;
+        live.getPersistentDataContainer().set(chestLootKey, PersistentDataType.BYTE, value);
+        // Fresh snapshot: persisting the flag cannot clobber the live inventory.
+        live.update(true, false);
+    }
+
+    /** A generated ruin chest sits at floor+1 surrounded by ruin masonry. */
+    private boolean isLikelyRuinChest(Block block) {
+        if (block.getY() != floorHeight(block.getX(), block.getZ()) + 1) return false;
+        World world = block.getWorld();
+        for (int dx = -4; dx <= 4; dx++) {
+            for (int dy = -2; dy <= 3; dy++) {
+                for (int dz = -4; dz <= 4; dz++) {
+                    Material type = world.getBlockAt(block.getX() + dx, block.getY() + dy, block.getZ() + dz).getType();
+                    if (type == Material.MOSSY_STONE_BRICKS || type == Material.CRACKED_STONE_BRICKS
+                            || type == Material.MUD_BRICKS || type == Material.MOSS_BLOCK) return true;
+                }
+            }
+        }
+        return false;
     }
 
     @EventHandler(ignoreCancelled = true)
@@ -382,7 +543,7 @@ public final class ReservaPodrida implements Listener {
         boolean rootStalker = "root_stalker".equals(id);
         mob.setCustomNameVisible(!rootStalker);
         mob.setPersistent(true);
-        mob.addPotionEffect(new PotionEffect(PotionEffectType.STRENGTH, Integer.MAX_VALUE, 1,
+        mob.addPotionEffect(new PotionEffect(PotionEffectType.STRENGTH, Integer.MAX_VALUE, 0,
                 false, false, false));
         if (rootStalker) mob.setInvisible(true);
         var health = mob.getAttribute(Attribute.MAX_HEALTH);
@@ -408,7 +569,7 @@ public final class ReservaPodrida implements Listener {
         if (!(event.getDamager() instanceof Spider spider)
                 || !"root_stalker".equals(spider.getPersistentDataContainer().get(reserveMobKey, PersistentDataType.STRING))
                 || !(event.getEntity() instanceof Player player) || !isReserve(player.getWorld())) return;
-        player.addPotionEffect(new PotionEffect(PotionEffectType.POISON, 50, 0, false, true, true));
+        // Sin dano continuo: el golpe conserva su dano normal, sin veneno/sangrado.
     }
 
     @EventHandler
@@ -499,11 +660,14 @@ public final class ReservaPodrida implements Listener {
                     int worldX = chunkX * 16 + x;
                     int worldZ = chunkZ * 16 + z;
                     int floor = floorHeight(worldX, worldZ);
-                    int roof = ROOF_Y + (int) Math.round(Math.sin(worldX * 0.025) * 1.5 + Math.cos(worldZ * 0.03) * 1.5);
+                    int roof = reserveRoofHeight(worldX, worldZ);
 
-                    for (int y = data.getMinHeight(); y < floor - 3; y++) {
-                        data.setBlock(x, y, z, y < 0 ? Material.DEEPSLATE : Material.STONE);
+                    int minY = data.getMinHeight();
+                      for (int y = minY + 1; y < floor - 3; y++) {
+                          data.setBlock(x, y, z, y < 0 ? Material.DEEPSLATE : Material.STONE);
                     }
+                    // Continuous bedrock slab: deterministic per column, no gaps across chunks.
+                    data.setBlock(x, minY, z, Material.BEDROCK);
                     data.setBlock(x, floor - 3, z, Material.DIRT);
                     data.setBlock(x, floor - 2, z, Material.ROOTED_DIRT);
                     data.setBlock(x, floor - 1, z, Material.MUD);
@@ -519,6 +683,9 @@ public final class ReservaPodrida implements Listener {
                         if (ceiling == Material.MANGROVE_LEAVES) setPersistentLeaves(data, x, y, z, ceiling);
                         else data.setBlock(x, y, z, ceiling);
                     }
+                    // Bedrock seal above the real cave roof; deterministic per column, within height limits.
+                    int capY = roof + 3;
+                    if (capY < data.getMaxHeight()) data.setBlock(x, capY, z, Material.BEDROCK);
 
                     if (features.nextDouble() < 0.035) {
                         int length = 2 + features.nextInt(5);
@@ -569,7 +736,7 @@ public final class ReservaPodrida implements Listener {
                 treePositions.add(new int[] {x, z});
 
                 int floor = floorHeight(worldX, worldZ);
-                int roof = ROOF_Y + (int) Math.round(Math.sin(worldX * 0.025) * 1.5 + Math.cos(worldZ * 0.03) * 1.5);
+                int roof = reserveRoofHeight(worldX, worldZ);
                 int style = features.nextInt(100);
                 int height;
                 int radiusX;
@@ -869,5 +1036,10 @@ public final class ReservaPodrida implements Listener {
                 + Math.cos(z * 0.13 - x * 0.045) * 1.1;
         double shape = broadHills + ridges + roughGround;
         return 44 + (int) Math.round(shape);
+    }
+
+    /** Deterministic cave-roof height for column (x, z); the bedrock cap sits at +3. */
+    static int reserveRoofHeight(int x, int z) {
+        return ReservaGenerator.ROOF_Y + (int) Math.round(Math.sin(x * 0.025) * 1.5 + Math.cos(z * 0.03) * 1.5);
     }
 }

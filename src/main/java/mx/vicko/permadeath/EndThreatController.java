@@ -26,6 +26,7 @@ import org.bukkit.event.entity.EntityDeathEvent;
 import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.hanging.HangingBreakByEntityEvent;
 import org.bukkit.event.hanging.HangingBreakEvent;
+import org.bukkit.event.player.PlayerChangedWorldEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.persistence.PersistentDataContainer;
@@ -48,6 +49,12 @@ public final class EndThreatController implements Listener {
     private final org.bukkit.NamespacedKey frameUnlockedKey;
     private final org.bukkit.NamespacedKey guardianFrameKey;
     private boolean spawningGuardian;
+    private int endermanCounter;
+
+    /** Resetea el conteo de endermans para los creepers electricos (llamar al recargar config). */
+    public void onConfigReload() {
+        endermanCounter = 0;
+    }
 
     public EndThreatController(PermadeathPlugin plugin) {
         this.plugin = plugin;
@@ -66,16 +73,27 @@ public final class EndThreatController implements Listener {
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onEndermanSpawn(CreatureSpawnEvent event) {
         if (!plugin.isPhaseActive(35)
-                || !plugin.getConfig().getBoolean("phases.35.end-threats.electric-creepers.enabled", true)
-                || !(event.getEntity() instanceof org.bukkit.entity.Enderman enderman)
+                || !plugin.getConfig().getBoolean("phases.35.end-threats.electric-creepers.enabled", true)) {
+            endermanCounter = 0;
+            return;
+        }
+        if (!(event.getEntity() instanceof org.bukkit.entity.Enderman enderman)
                 || event.getLocation().getWorld().getEnvironment() != World.Environment.THE_END
                 || event.getSpawnReason() != CreatureSpawnEvent.SpawnReason.NATURAL) return;
 
-        // Un creeper por cada Enderman que el juego genere naturalmente en el End: ratio 1:1.
-        int ratio = Math.max(1, plugin.getConfig().getInt(
-                "phases.35.end-threats.electric-creepers.per-enderman", 1));
-        for (int i = 0; i < ratio; i++) {
-            plugin.getServer().getScheduler().runTask(plugin, () -> spawnElectricCreeper(enderman));
+        // Un creeper electrico por cada N endermans generados naturalmente en el End (MONITOR en main thread, sin sincronizar).
+        int endermansPerCreeper = Math.max(1, plugin.getConfig().getInt(
+                "phases.35.end-threats.electric-creepers.endermans-per-creeper", 5));
+        endermanCounter++;
+        if (endermanCounter % endermansPerCreeper != 0) return;
+        plugin.getServer().getScheduler().runTask(plugin, () -> spawnElectricCreeper(enderman));
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onLeaveEnd(PlayerChangedWorldEvent event) {
+        if (event.getFrom().getEnvironment() == World.Environment.THE_END
+                && event.getPlayer().getWorld().getEnvironment() != World.Environment.THE_END) {
+            event.getPlayer().removePotionEffect(PotionEffectType.INVISIBILITY);
         }
     }
 

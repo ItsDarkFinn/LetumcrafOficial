@@ -47,8 +47,17 @@ public final class NightHuntEvent implements Listener {
     }
 
     public void shutdown() {
-        if (task != null) task.cancel();
+        if (task != null) { task.cancel(); task = null; }
         if (activeHunt != null) finish("El evento se cerró al apagar el servidor.");
+    }
+
+    /** Bloque 4 — tras el sellado no hay Cacería (ni auto ni manual en curso). */
+    private boolean seasonEnded() {
+        try {
+            return plugin.seasonService() != null && plugin.seasonService().isSeasonEnded();
+        } catch (RuntimeException exception) {
+            return false;
+        }
     }
 
     public String startManualTest() {
@@ -113,6 +122,10 @@ public final class NightHuntEvent implements Listener {
 
     private void tick() {
         if (activeHunt != null) {
+            if (seasonEnded()) {
+                finish("La temporada terminó; la Cacería queda cerrada.");
+                return;
+            }
             if (activeHunt.manual) {
                 if (System.currentTimeMillis() >= activeHunt.expiresAtMillis) finish("La prueba terminó por tiempo.");
             } else if (!isNight(activeHunt.world)) {
@@ -120,10 +133,12 @@ public final class NightHuntEvent implements Listener {
             }
             return;
         }
+        if (seasonEnded()) return;
         if (!plugin.getConfig().getBoolean("random-events.enabled", true)) return;
         int day = plugin.days().getCurrentDay();
-        if (day < START_DAY || day > FINAL_DAY || !isEligibleDay(day)) return;
-        if (eligiblePlayers().size() < minimumPlayers()) return;
+        int effectiveStart = plugin.seasonService() != null ? plugin.seasonService().mapLegacyDay(START_DAY) : START_DAY;
+        if (day < effectiveStart || day > FINAL_DAY || !isEligibleDay(day)) return;
+        if (!passesSeasonGate(eligiblePlayers())) return;
         World nightWorld = Bukkit.getWorlds().stream()
                 .filter(world -> world.getEnvironment() == World.Environment.NORMAL && isNight(world))
                 .findFirst().orElse(null);
@@ -132,7 +147,7 @@ public final class NightHuntEvent implements Listener {
                 plugin.getConfig().getDouble("random-events.night-check-chance", 0.15)));
         if (chance(probability)) {
             List<Player> players = eligiblePlayers();
-            if (players.size() >= minimumPlayers()) {
+            if (passesSeasonGate(players)) {
                 plugin.getConfig().set("random-events.last-auto-event-day", day);
                 plugin.saveConfig();
                 begin(nightWorld, players, false, 0L);
@@ -159,6 +174,10 @@ public final class NightHuntEvent implements Listener {
         overflow.values().forEach(item -> player.getWorld().dropItemNaturally(player.getLocation(), item));
         player.sendTitle("§d¡Cacería completada!", "§fRecibiste una Esquirla de Eclipse", 5, 50, 10);
         Bukkit.broadcastMessage("§d" + player.getName() + " completó la Cacería Nocturna y obtuvo una Esquirla.");
+        try {
+            if (plugin.seasonService() != null) plugin.seasonService().notifyNightHunt(player);
+        } catch (RuntimeException ignored) {
+        }
         if (activeHunt.completed.containsAll(activeHunt.progress.keySet())) finish("Todos los participantes completaron la misión.");
     }
 
@@ -206,6 +225,16 @@ public final class NightHuntEvent implements Listener {
 
     private int minimumPlayers() {
         return Math.max(1, plugin.getConfig().getInt("random-events.minimum-online-players", 15));
+    }
+
+    /** Gate único de temporada (M roster, 40% o minimum-online-players si mayor); manual bypass. */
+    private boolean passesSeasonGate(List<Player> players) {
+        try {
+            SeasonService seasons = plugin.seasonService();
+            if (seasons != null) return seasons.passesGateForPlayers(players);
+        } catch (RuntimeException ignored) {
+        }
+        return players.size() >= minimumPlayers();
     }
 
     private boolean isNight(World world) {

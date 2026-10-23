@@ -39,7 +39,16 @@ public final class CaravanEvent implements Listener {
     }
 
     public void shutdown() {
-        if (task != null) task.cancel();
+        if (task != null) { task.cancel(); task = null; }
+    }
+
+    /** Bloque 4 — tras el sellado no hay Caravana automática. */
+    private boolean seasonEnded() {
+        try {
+            return plugin.seasonService() != null && plugin.seasonService().isSeasonEnded();
+        } catch (RuntimeException exception) {
+            return false;
+        }
     }
 
     public String status() {
@@ -60,16 +69,25 @@ public final class CaravanEvent implements Listener {
     }
 
     private void tick() {
+        if (seasonEnded()) return;
         if (!plugin.getConfig().getBoolean("random-events.enabled", true)
                 || !plugin.getConfig().getBoolean("random-events.caravan.enabled", true)) return;
         int day = plugin.days().getCurrentDay();
         int interval = Math.max(1, plugin.getConfig().getInt("random-events.caravan.interval-days", 2));
         int lastDay = plugin.getConfig().getInt("random-events.caravan.last-spawn-day", 0);
-        if (day < Math.max(1, plugin.getConfig().getInt("random-events.caravan.start-day", 1))
+        int caravanStart = Math.max(1, plugin.getConfig().getInt("random-events.caravan.start-day", 1));
+        if (plugin.seasonService() != null) caravanStart = plugin.seasonService().mapLegacyDay(caravanStart);
+        if (day < caravanStart
                 || (lastDay > 0 && day - lastDay < interval) || lastAttemptDay == day) return;
         List<Player> players = eligiblePlayers().stream()
                 .filter(player -> isNight(player.getWorld())).toList();
         if (players.isEmpty()) return;
+        // Gate único de temporada (automático); /pd caravana iniciar lo omite (prueba manual).
+        try {
+            SeasonService seasons = plugin.seasonService();
+            if (seasons != null && !seasons.passesGateForPlayers(players)) return;
+        } catch (RuntimeException ignored) {
+        }
         // Solo se tira una vez por noche; si falla, puede volver a intentarlo la siguiente noche.
         lastAttemptDay = day;
         double chance = Math.max(0.0, Math.min(1.0,
