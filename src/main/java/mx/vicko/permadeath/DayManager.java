@@ -30,6 +30,11 @@ public final class DayManager {
         return (int) Duration.ofMillis(elapsed).toDays() + 1;
     }
 
+    /** True mientras el calendario esta forzado con /pd dia (ese dia no es "real"). */
+    public boolean isManualDayOverride() {
+        return plugin.getConfig().getInt("manual-day-override", 0) > 0;
+    }
+
     public void setManualDay(int day) {
         plugin.getConfig().set("manual-day-override", day);
         plugin.saveConfig();

@@ -149,6 +149,11 @@ public final class SeasonListener implements Listener {
         }
         // Sin consumir pending-revival (lo gestiona RevivalAnchor): reevalúa racha, idempotente por día.
         seasons.onReviveStreak();
+        // Objetivos colectivos sin actor: si el pago quedo pendiente, este join lo reintenta.
+        try {
+            seasons.retryPendingRewards();
+        } catch (RuntimeException ignored) {
+        }
         // Bloque 4 — fija el primer día visto por UUID (días sobrevividos por hook, sin escaneos).
         try {
             seasons.notePlayerSeen(event.getPlayer().getUniqueId(), seasons.currentDay());

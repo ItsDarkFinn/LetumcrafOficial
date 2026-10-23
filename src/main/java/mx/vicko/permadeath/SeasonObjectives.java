@@ -542,6 +542,14 @@ public final class SeasonObjectives {
      * N vuelve a ser 5 o mas. Idempotente por dia (un doble rollover no suma dos veces).
      */
     public void onDayEvaluated(int dayIndex, int vivosEnRoster) {
+        onDayEvaluated(dayIndex, vivosEnRoster, null);
+    }
+
+    /**
+     * Variante con actor representativo: la racha es colectiva, pero la recompensa necesita un
+     * jugador online al que pagarse. Sin actor, el pago quedaria pendiente para siempre.
+     */
+    public void onDayEvaluated(int dayIndex, int vivosEnRoster, UUID actor) {
         Objective objective = Objective.TRES_DIAS_DIEZMADOS;
         Progress state = progress.get(objective);
         if (dayIndex <= 0 || dayIndex == state.lastStreakDay) {
@@ -555,7 +563,7 @@ public final class SeasonObjectives {
             }
             state.streak = Math.min(DIAS_DIEZMADOS_RACHA, state.streak + 1);
             if (state.streak >= DIAS_DIEZMADOS_RACHA) {
-                complete(objective, null, "3 dias reales seguidos con menos de 5 vivos");
+                complete(objective, actor, "3 dias reales seguidos con menos de 5 vivos");
             } else {
                 listener.onProgress(objective, "Racha diezmados " + state.streak + '/' + DIAS_DIEZMADOS_RACHA
                         + " (se corta al volver a " + DIAS_DIEZMADOS_VIVOS + " vivos o mas)");

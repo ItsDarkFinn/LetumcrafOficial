@@ -222,10 +222,16 @@ public final class SeasonService {
                 return false;
             }
             // B1: solo Esquirlas entregables directas; Núcleos/Chispas esperan banco/Fosa (B2/B3).
-            if (reward.currency() != SeasonObjectives.Currency.ESQUIRLAS || actor == null) {
+            if (reward.currency() != SeasonObjectives.Currency.ESQUIRLAS) {
                 return false;
             }
-            Player player = Bukkit.getPlayer(actor);
+            // Objetivos colectivos (racha diezmados) se completan sin actor. Pagar a un
+            // representante online evita que la recompensa quede pendiente para siempre.
+            UUID target = actor != null ? actor : representativeActor();
+            if (target == null) {
+                return false;
+            }
+            Player player = Bukkit.getPlayer(target);
             if (player == null || !player.isOnline()) {
                 return false;
             }
@@ -426,6 +432,16 @@ public final class SeasonService {
 
     public SeasonObjectives objectives() {
         return objectives;
+    }
+
+    /**
+     * Reintenta pagos pendientes cuando entra un jugador. Necesario para objetivos colectivos:
+     * al completarse sin nadie online no hay destinatario y el pago espera hasta el proximo join.
+     */
+    public void retryPendingRewards() {
+        if (objectives != null) {
+            objectives.retryPendingRewards();
+        }
     }
 
     public boolean hasRoster() {
@@ -642,7 +658,7 @@ public final class SeasonService {
                 announceAct(act);
             }
             try {
-                objectives.onDayEvaluated(day, aliveForStreak());
+                evaluateStreak(day);
                 objectives.retryPendingRewards();
             } catch (RuntimeException exception) {
                 plugin.getLogger().warning("[Temporada] onDayEvaluated: " + exception.getMessage());
@@ -668,6 +684,17 @@ public final class SeasonService {
 
     public void noteBedEnter() {
         sleptToday = true;
+    }
+
+    /**
+     * La racha de "3 dias reales" no debe contar saltos forzados con /pd dia. Ademas pasa un
+     * actor representativo para que la recompensa colectiva tenga destinatario.
+     */
+    private void evaluateStreak(int day) {
+        if (objectives == null || state == null || plugin.days().isManualDayOverride()) {
+            return;
+        }
+        objectives.onDayEvaluated(day, aliveForStreak(), representativeActor());
     }
 
     private UUID representativeActor() {
@@ -766,7 +793,7 @@ public final class SeasonService {
         }
         Bukkit.getScheduler().runTaskLater(plugin, () -> {
             try {
-                objectives.onDayEvaluated(currentDay(), aliveForStreak());
+                evaluateStreak(currentDay());
             } catch (RuntimeException exception) {
                 plugin.getLogger().warning("[Temporada] racha/muerte: " + exception.getMessage());
             }
@@ -1738,7 +1765,7 @@ public final class SeasonService {
             return;
         }
         try {
-            objectives.onDayEvaluated(currentDay(), aliveForStreak());
+            evaluateStreak(currentDay());
         } catch (RuntimeException exception) {
             plugin.getLogger().warning("[Temporada] racha/revive: " + exception.getMessage());
         }

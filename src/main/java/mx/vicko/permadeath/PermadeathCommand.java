@@ -636,8 +636,27 @@ public final class PermadeathCommand implements CommandExecutor, TabCompleter {
         try {
             int day = Integer.parseInt(args[1]);
             if (day < 1) throw new NumberFormatException();
+            int finalDay = -1;
+            boolean ended = false;
+            try {
+                SeasonService seasons = plugin.seasonService();
+                if (seasons != null) {
+                    finalDay = seasons.finalDay();
+                    ended = seasons.isSeasonEnded();
+                }
+            } catch (RuntimeException ignored) {
+            }
             plugin.days().setManualDay(day);
             send(sender, "Día de prueba forzado a &e" + day + "&r.");
+            if (ended) {
+                send(sender, "&eLa temporada ya está sellada; /pd dia no reabre el final.");
+            } else if (finalDay > 0 && day > finalDay) {
+                send(sender, "&eLa temporada termina en el día &6" + finalDay
+                        + "&e; el final se evaluará ahora (no en el día " + day + ").");
+            } else if (finalDay > 0 && day == finalDay) {
+                send(sender, "&eDía final de la temporada (&6" + finalDay
+                        + "&e): se evaluará victoria o derrota.");
+            }
         } catch (NumberFormatException ignored) {
             send(sender, "&cUsa un número entero mayor o igual a 1.");
         }

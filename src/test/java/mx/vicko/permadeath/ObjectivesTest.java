@@ -229,6 +229,26 @@ class ObjectivesTest {
     }
 
     @Test
+    void groupStreakRewardUsesRepresentativeActor() {
+        Recorder recorder = new Recorder();
+        SeasonObjectives model = model(6, recorder, new AtomicLong(1_000L));
+        List<UUID> actors = new ArrayList<>();
+        model.bindRewardProvider((actor, reward) -> {
+            actors.add(actor);
+            return true;
+        });
+        UUID player = UUID.randomUUID();
+
+        model.onDayEvaluated(10, 4, player);
+        model.onDayEvaluated(11, 4, player);
+        model.onDayEvaluated(12, 4, player);
+
+        assertEquals(List.of(player), actors,
+                "la recompensa colectiva debe pagarse al actor representativo, no a null");
+        assertEquals(Status.REWARDED, model.status(Objective.TRES_DIAS_DIEZMADOS));
+    }
+
+    @Test
     void nightObjectiveNeedsBothSleeplessNightAndSporeSample() {
         Recorder recorder = new Recorder();
         SeasonObjectives model = model(2, recorder, new AtomicLong(1_000L));
