@@ -1,5 +1,7 @@
 package mx.vicko.permadeath;
 
+import mx.vicko.permadeath.odyssey.OdysseyManager;
+import org.bukkit.World;
 import org.bukkit.command.PluginCommand;
 import org.bukkit.NamespacedKey;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -31,6 +33,7 @@ public final class PermadeathPlugin extends JavaPlugin {
     private SolarFallEvent solarFallEvent;
     private PitController pitController;
     private ChispaItem chispaItem;
+    private OdysseyManager odyssey;
 
     @Override
     public void onEnable() {
@@ -42,6 +45,12 @@ public final class PermadeathPlugin extends JavaPlugin {
         getConfig().addDefault("reserve.portal.enabled", true);
         getConfig().addDefault("reserve.portal.search-radius-blocks", 128);
         getConfig().addDefault("season.pit-duration-minutes", 12);
+        getConfig().addDefault("odyssey.enabled", true);
+        getConfig().addDefault("odyssey.world-name", OdysseyManager.DEFAULT_WORLD_NAME);
+        getConfig().addDefault("odyssey.spawn-y", OdysseyManager.DEFAULT_SPAWN_Y);
+        getConfig().addDefault("odyssey.island-spacing-chunks", OdysseyManager.DEFAULT_SPACING_CHUNKS);
+        getConfig().addDefault("odyssey.seed", 0L);
+        getConfig().addDefault("odyssey.ban-reason", OdysseyManager.DEFAULT_BAN_REASON);
         String configuredPrefix = getConfig().getString("messages.prefix", "");
         if (configuredPrefix.contains("Permadeath")) {
             getConfig().set("messages.prefix", configuredPrefix.replace("Permadeath", "LetumcrafOficial"));
@@ -78,6 +87,18 @@ public final class PermadeathPlugin extends JavaPlugin {
         cursedStriderController.start();
         this.reservaPodrida = new ReservaPodrida(this);
         this.reservaPortalController = new ReservaPortalController(this, reservaPodrida);
+
+        // Dimensión aislada: el manager crea/carga su mundo y registra sus
+        // propios listeners y tareas. No toca Reserva Podrida ni los mundos
+        // vanilla.
+        this.odyssey = new OdysseyManager(this);
+        try {
+            this.odyssey.start();
+        } catch (RuntimeException exception) {
+            getLogger().log(java.util.logging.Level.SEVERE,
+                    "No se pudo iniciar La Falla de la Odisea; el resto del plugin sigue activo.",
+                    exception);
+        }
 
         getServer().getPluginManager().registerEvents(new PermanentDeathListener(this), this);
         getServer().getPluginManager().registerEvents(new DifficultyListener(this), this);
@@ -125,6 +146,7 @@ public final class PermadeathPlugin extends JavaPlugin {
         if (fortressHuntEvent != null) fortressHuntEvent.shutdown();
         if (cursedStriderController != null) cursedStriderController.shutdown();
         if (pitController != null) pitController.stop();
+        if (odyssey != null) odyssey.stop();
         if (reservaPodrida != null) reservaPodrida.shutdown();
         if (reservaPortalController != null) reservaPortalController.shutdown();
         if (phaseTasks != null) phaseTasks.stop();
@@ -226,6 +248,13 @@ public final class PermadeathPlugin extends JavaPlugin {
     public ReservaPodrida reservaPodrida() { return reservaPodrida; }
 
     public ReservaPortalController reservaPortal() { return reservaPortalController; }
+
+    public OdysseyManager odyssey() { return odyssey; }
+
+    /** Guard central para que las fases globales no invadan La Falla. */
+    public boolean isOdysseyWorld(World world) {
+        return odyssey != null && odyssey.isOdyssey(world);
+    }
 
     public PhaseTasks phaseTasks() { return phaseTasks; }
 

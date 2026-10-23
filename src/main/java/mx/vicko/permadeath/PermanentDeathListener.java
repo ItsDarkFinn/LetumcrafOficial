@@ -17,6 +17,12 @@ public final class PermanentDeathListener implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onDeath(PlayerDeathEvent event) {
+        // La Falla de la Odisea gestiona su propio ban permanente y no debe
+        // contaminar la temporada, el marcador de muerte ni el permadeath
+        // global de los mundos vanilla.
+        if (plugin.odyssey() != null && plugin.odyssey().isOdyssey(event.getEntity().getWorld())) {
+            return;
+        }
         // Bloque 4 — tras el sellado no se registra, no se cuenta, no se expulsa
         // ni se anuncia: la foto del final queda congelada y el muerto ve /pd final.
         try {

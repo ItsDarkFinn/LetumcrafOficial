@@ -82,6 +82,9 @@ public final class SeasonListener implements Listener {
         if (!(event.getEntity() instanceof Player player)) {
             return;
         }
+        if (plugin.isOdysseyWorld(player.getWorld())) {
+            return;
+        }
         SeasonService seasons = seasons();
         if (seasons == null) {
             return;
@@ -101,6 +104,9 @@ public final class SeasonListener implements Listener {
         if (!(event.getWhoClicked() instanceof Player player)) {
             return;
         }
+        if (plugin.isOdysseyWorld(player.getWorld())) {
+            return;
+        }
         SeasonService seasons = seasons();
         if (seasons == null) {
             return;
@@ -116,6 +122,9 @@ public final class SeasonListener implements Listener {
         if (!(event.getPlayer() instanceof Player player)) {
             return;
         }
+        if (plugin.isOdysseyWorld(player.getWorld())) {
+            return;
+        }
         SeasonService seasons = seasons();
         if (seasons == null || !isFortressChest(event.getInventory())) {
             return;
@@ -125,6 +134,9 @@ public final class SeasonListener implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onBedEnter(PlayerBedEnterEvent event) {
+        if (plugin.isOdysseyWorld(event.getPlayer().getWorld())) {
+            return;
+        }
         SeasonService seasons = seasons();
         if (seasons == null) {
             return;
@@ -134,6 +146,9 @@ public final class SeasonListener implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onDeath(PlayerDeathEvent event) {
+        if (plugin.isOdysseyWorld(event.getEntity().getWorld())) {
+            return;
+        }
         SeasonService seasons = seasons();
         if (seasons == null) {
             return;

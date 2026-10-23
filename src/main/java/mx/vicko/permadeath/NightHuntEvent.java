@@ -203,7 +203,8 @@ public final class NightHuntEvent implements Listener {
         List<Player> players = new ArrayList<>();
         for (Player player : Bukkit.getOnlinePlayers()) {
             if (player.isOnline() && !player.isDead() && player.getGameMode() != GameMode.SPECTATOR
-                    && !plugin.deaths().isDead(player.getUniqueId())) players.add(player);
+                    && !plugin.deaths().isDead(player.getUniqueId())
+                    && !plugin.isOdysseyWorld(player.getWorld())) players.add(player);
         }
         return players;
     }
@@ -238,7 +239,7 @@ public final class NightHuntEvent implements Listener {
     }
 
     private boolean isNight(World world) {
-        if (world.getEnvironment() != World.Environment.NORMAL) return false;
+        if (world.getEnvironment() != World.Environment.NORMAL || plugin.isOdysseyWorld(world)) return false;
         long time = world.getTime();
         return time >= NIGHT_START && time <= NIGHT_END;
     }

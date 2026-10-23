@@ -189,3 +189,17 @@ season:
     BANCO_ANTES_DEL_FINAL:
       currency: ESQUIRLAS
       amount: 1
+
+# La Falla de la Odisea: dimensión opcional y aislada.
+# Se crea junto al resto del plugin; no modifica Reserva Podrida ni los mundos
+# vanilla. Si WorldCreator rechaza Environment.CUSTOM, el manager usa un mundo
+# separado con Environment.NORMAL y el mismo generador de vacío.
+odyssey:
+  enabled: true
+  # No cambiar el nombre después de generar el mundo: identifica la dimensión
+  # y su carpeta. El spawn queda en 8.5 / spawn-y / 8.5.
+  world-name: "La Falla de la Odisea"
+  spawn-y: 129.0
+  island-spacing-chunks: 8
+  seed: 0
+  ban-reason: "Has muerto en La Falla de la Odisea. Tu cuenta ha sido baneada permanentemente."

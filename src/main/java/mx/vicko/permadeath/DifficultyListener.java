@@ -109,6 +109,7 @@ public final class DifficultyListener implements Listener {
 
     @EventHandler(ignoreCancelled = true)
     public void onMobHit(EntityDamageByEntityEvent event) {
+        if (plugin.isOdysseyWorld(event.getEntity().getWorld())) return;
         if (!(event.getEntity() instanceof Player player)) return;
         Entity attacker = event.getDamager();
         if (attacker instanceof Projectile projectile && projectile.getShooter() instanceof Entity shooter) attacker = shooter;
@@ -139,6 +140,7 @@ public final class DifficultyListener implements Listener {
 
     @EventHandler(ignoreCancelled = true)
     public void onSpawn(CreatureSpawnEvent event) {
+        if (plugin.isOdysseyWorld(event.getLocation().getWorld())) return;
         LivingEntity mob = event.getEntity();
         if (plugin.isPhaseActive(25) && mob instanceof Creeper creeper) { creeper.setExplosionRadius(creeper.getExplosionRadius() * 2); creeper.setMaxFuseTicks(20); }
         if (plugin.isPhaseActive(35) && mob instanceof EnderDragon dragon) {

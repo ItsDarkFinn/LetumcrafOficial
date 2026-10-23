@@ -184,6 +184,10 @@ public final class PhaseTasks {
     private void applyPlayerPhases(Player player) {
         if (player.isDead()) return;
         World world = player.getWorld();
+        if (plugin.isOdysseyWorld(world)) {
+            restoreExpiredLock(player);
+            return;
+        }
         Block feet = player.getLocation().getBlock();
 
         if (plugin.isPhaseActive(10)) scareAnimals(player);
@@ -205,6 +209,7 @@ public final class PhaseTasks {
     }
 
     private void applyWorldPhases(World world) {
+        if (plugin.isOdysseyWorld(world)) return;
         if (plugin.isPhaseActive(20)) {
             for (Entity entity : world.getEntities()) {
                 if (entity instanceof Monster monster) destroyTorchBelow(monster);

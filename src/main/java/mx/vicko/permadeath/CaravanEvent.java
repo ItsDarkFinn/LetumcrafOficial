@@ -215,7 +215,8 @@ public final class CaravanEvent implements Listener {
     private List<Player> eligiblePlayers() {
         List<Player> players = new ArrayList<>();
         for (Player player : Bukkit.getOnlinePlayers()) {
-            if (player.getGameMode() != GameMode.SPECTATOR && !plugin.deaths().isDead(player.getUniqueId())) {
+            if (player.getGameMode() != GameMode.SPECTATOR && !plugin.deaths().isDead(player.getUniqueId())
+                    && !plugin.isOdysseyWorld(player.getWorld())) {
                 players.add(player);
             }
         }
@@ -223,7 +224,7 @@ public final class CaravanEvent implements Listener {
     }
 
     private boolean isNight(World world) {
-        if (world.getEnvironment() != World.Environment.NORMAL) return false;
+        if (world.getEnvironment() != World.Environment.NORMAL || plugin.isOdysseyWorld(world)) return false;
         long time = world.getTime();
         return time >= 13_000L && time <= 23_000L;
     }

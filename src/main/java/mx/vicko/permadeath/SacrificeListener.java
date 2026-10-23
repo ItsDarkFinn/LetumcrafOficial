@@ -507,6 +507,9 @@ public final class SacrificeListener implements Listener {
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onDeath(PlayerDeathEvent event) {
         Player player = event.getEntity();
+        if (plugin.isOdysseyWorld(player.getWorld())) {
+            return;
+        }
         if (!has(player.getUniqueId(), SacrificeType.ANCLA)) {
             return;
         }
@@ -522,6 +525,9 @@ public final class SacrificeListener implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onRespawn(PlayerRespawnEvent event) {
         Player player = event.getPlayer();
+        if (plugin.isOdysseyWorld(player.getWorld())) {
+            return;
+        }
         if (!has(player.getUniqueId(), SacrificeType.ANCLA)) {
             return;
         }
