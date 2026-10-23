@@ -1,0 +1,122 @@
+# Se crea automáticamente al instalar el plugin. El día 1 comienza en ese instante.
+start-epoch-millis: 0
+
+# 0 = seguir el calendario real. Un valor mayor fuerza ese día para pruebas/eventos.
+manual-day-override: 0
+
+permadeath:
+  enabled: true
+  ban-reason: "Has muerto. Tu partida de Permadeath ha terminado."
+
+death-marker:
+  enabled: true
+  # Si el sitio exacto está ocupado o es peligroso, busca una superficie segura cercana.
+  search-radius: 4
+
+reserve:
+  enabled: true
+  unlock-day: 20
+  filter-duration-minutes: 10
+  chest-chance-per-chunk: 0.16
+  portal:
+    enabled: true
+    # Busca una zona natural sin construcciones ni agua dentro de este radio desde el spawn.
+    search-radius-blocks: 128
+
+resurrection-ritual:
+  enabled: true
+  duration-seconds: 30
+  participant-radius: 5.0
+  waves: 3
+  wave-interval-seconds: 10
+  leaver-penalty-seconds: 3600
+
+random-events:
+  enabled: true
+  minimum-online-players: 15
+  # Probabilidad por cada revisión nocturna (una revisión cada 30 segundos).
+  night-check-chance: 0.15
+  # Solo afecta al comando /pd evento iniciar.
+  test-duration-seconds: 600
+  dungeon-core-enabled: true
+  dungeon-core-chance: 0.05
+  last-auto-event-day: 0
+  caravan:
+    enabled: true
+    start-day: 1
+    interval-days: 2
+    # Una sola tirada por noche mientras haya jugadores vivos en el Overworld.
+    night-check-chance: 0.10
+    core-chance: 0.25
+    rare-loot-chance: 0.01
+    last-spawn-day: 0
+  nether:
+    start-day: 20
+    cooldown-days: 3
+    last-event-day: 0
+    fortress-hunt:
+      enabled: true
+      start-day: 10
+      last-day: 0
+      duration-seconds: 600
+      core-chance: 0.10
+      netherite-chance: 0.10
+    cursed-striders:
+      enabled: true
+      start-day: 10
+      chance: 0.10
+    ashstorm:
+      enabled: true
+      daily-chance: 0.15
+      duration-seconds: 300
+      wave-interval-seconds: 30
+      blazes-per-wave: 4
+      ghasts-per-wave: 2
+      max-active-mobs: 20
+      darkness-interval-seconds: 15
+      darkness-duration-seconds: 10
+      effect-radius: 80.0
+
+messages:
+  prefix: "&8[&cLetumcrafOficial&8] &r"
+
+# Cada fase puede desactivarse en juego con /pd fase <día> off.
+# El valor omitido se considera activado.
+phases:
+  10:
+    enabled: true
+  20:
+    enabled: true
+    bats:
+      book-drop-chance: 0.05
+    pale-warden:
+      enabled: true
+  25:
+    enabled: true
+  35:
+    enabled: true
+    end-threats:
+      electric-creepers:
+        enabled: true
+        per-enderman: 1
+      elytra-guardian:
+        enabled: true
+        armored-shulker-chance: 0.25
+  40:
+    enabled: true
+  50:
+    enabled: true
+  60:
+    enabled: true
+  70:
+    enabled: true
+  80:
+    enabled: true
+  90:
+    enabled: true
+  100:
+    enabled: true
+
+calendar:
+  paused: false
+  paused-at-epoch-millis: 0

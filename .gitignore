@@ -1,0 +1,25 @@
+# Build output
+build/
+.gradle/
+out/
+
+# Compiled artifacts
+*.class
+*.jar
+*.zip
+!gradle/wrapper/gradle-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.classpath
+.project
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs and temporary files
+*.log

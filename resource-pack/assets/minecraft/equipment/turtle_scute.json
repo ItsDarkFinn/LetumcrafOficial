@@ -1,0 +1,14 @@
+{
+  "layers": {
+    "humanoid": [
+      {
+        "texture": "permadeath:spore_mask"
+      }
+    ],
+    "humanoid_baby": [
+      {
+        "texture": "permadeath:spore_mask"
+      }
+    ]
+  }
+}

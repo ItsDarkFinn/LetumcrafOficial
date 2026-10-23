@@ -1,0 +1,17 @@
+name: LetumcrafOficial
+version: '0.2.45'
+main: mx.vicko.permadeath.PermadeathPlugin
+api-version: '26.3'
+description: Dificultad progresiva de permadeath basada en días reales.
+commands:
+  permadeath:
+    description: Consulta o administra la dificultad de Permadeath.
+    usage: /permadeath <estado|fases|dia|auto|pausa|reanudar|fase|muertos|revivir|ancla|nucleo|esquirla|sello|filtro|reserva|evento|caravana|reload>
+    aliases: [pd]
+permissions:
+  permadeath.admin:
+    description: Permite cambiar el día y el modo de calendario.
+    default: op
+  permadeath.bypassdeath:
+    description: Impide el baneo por muerte permanente.
+    default: false

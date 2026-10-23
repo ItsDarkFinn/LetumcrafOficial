@@ -1,0 +1,6 @@
+{
+  "parent": "minecraft:item/generated",
+  "textures": {
+    "layer0": "permadeath:item/anchor_last_breath"
+  }
+}
