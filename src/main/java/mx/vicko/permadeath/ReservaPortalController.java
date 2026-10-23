@@ -334,7 +334,7 @@ public final class ReservaPortalController implements Listener {
                             player.sendMessage(color(error));
                             setCooldown(player, 500L);
                         } else {
-                            player.sendMessage(color("&aSaliste de la Reserva Podrida."));
+                            player.sendMessage(color("&aHas salido de la Reserva Podrida."));
                             setCooldown(player, 2500L);
                         }
                     } finally {

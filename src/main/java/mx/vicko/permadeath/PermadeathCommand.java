@@ -101,7 +101,8 @@ public final class PermadeathCommand implements CommandExecutor, TabCompleter {
                 return true;
             }
             if (args.length == 2 && args[1].equalsIgnoreCase("salir")) {
-                send(sender, plugin.reservaPodrida().exit(player));
+                String result = plugin.reservaPodrida().exit(player);
+                send(sender, result != null ? result : "&aHas salido de la Reserva Podrida.");
             } else if (args.length == 1) {
                 String result = plugin.reservaPodrida().enter(player);
                 if (result != null) send(sender, result);
@@ -798,6 +799,9 @@ public final class PermadeathCommand implements CommandExecutor, TabCompleter {
     }
 
     private void send(CommandSender sender, String message) {
+        if (message == null) {
+            return;
+        }
         sender.sendMessage(color(plugin.getConfig().getString("messages.prefix", "") + message));
     }
 

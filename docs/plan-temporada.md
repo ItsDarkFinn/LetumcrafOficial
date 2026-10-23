@@ -103,7 +103,7 @@ Fase 100 existente apaga el sol. Con 30 Núcleos del banco el grupo enciende el 
 
 Añadir y conectar sin reescribir sistemas. Un dueño por archivo; puntos calientes `Plugin`/`PhaseTasks` siempre seriales. Tests antes de cambiar lógica numérica; no quitar tests ni convertir `skipped` en PASS. Compilación no equivale a reproducir en cliente. No declarar verificado servidor sin pruebas. Commits solo si el usuario pide. Estado transaccional de temporada en archivo propio (`season-state.yml`), no `config.yml` como base de datos.
 
-FUERA DE ALCANCE: hotbar phase 100 (memoria/pérdida al reiniciar); `MAX_HEALTH` phase 70 no restaura; NightHunt tick 93% sin una tirada por noche; bedrock retrofit solo chunks nuevos. Mantener arreglos recientes: fuego vanilla, cofres loot una vez sin recovery, 1 creeper cada 5 Endermans, clear de invis al salir del End, bats en persecución.
+FUERA DE ALCANCE: hotbar phase 100 (memoria/pérdida al reiniciar); `MAX_HEALTH` phase 70 no restaura; NightHunt tick 93% sin una tirada por noche; bedrock retrofit solo chunks nuevos. Mantener arreglos recientes: fuego vanilla, cofres loot una vez sin recovery, densidad de creepers del End configurable (1 por cada 5 Endermans por defecto; `per-enderman: 1` de configs 0.2.44 conserva 1:1), clear de invis al salir del End, bats en persecución.
 
 ORDEN 1→2→3→4. Ningún bloque siguiente hasta build verde y revisión del anterior. Se puede paralelizar por archivos disjuntos dentro de un bloque.
 

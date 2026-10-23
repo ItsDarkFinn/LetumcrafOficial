@@ -1,5 +1,6 @@
 package mx.vicko.permadeath;
 
+import com.destroystokyo.paper.event.player.PlayerArmorChangeEvent;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -68,6 +69,7 @@ public final class SacrificeListener implements Listener {
     private final PermadeathPlugin plugin;
     private BukkitTask glowTask;
     private BukkitTask detectTask;
+    private BukkitTask armorTask;
 
     public SacrificeListener(PermadeathPlugin plugin) {
         this.plugin = plugin;
@@ -81,6 +83,9 @@ public final class SacrificeListener implements Listener {
         }
         glowTask = Bukkit.getScheduler().runTaskTimer(plugin, this::tickOjoGlow, 40L, 40L);
         detectTask = Bukkit.getScheduler().runTaskTimer(plugin, this::tickAbrigoDetect, 100L, 100L);
+        // Red de seguridad para rutas que Paper no permite cancelar (clic derecho
+        // desde la hotbar, cambios de armadura de otros plugins, etc.).
+        armorTask = Bukkit.getScheduler().runTaskTimer(plugin, this::tickArmor, 20L, 5L);
     }
 
     public void stop() {
@@ -91,6 +96,10 @@ public final class SacrificeListener implements Listener {
         if (detectTask != null) {
             detectTask.cancel();
             detectTask = null;
+        }
+        if (armorTask != null) {
+            armorTask.cancel();
+            armorTask = null;
         }
     }
 
@@ -182,11 +191,24 @@ public final class SacrificeListener implements Listener {
         }
     }
 
+    /** Aplica el bloqueo a todos los elegidos online; la tarea corre cada 5 ticks. */
+    private void tickArmor() {
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            if (!player.isDead()) {
+                enforceArmor(plugin, player);
+            }
+        }
+    }
+
     static boolean isHighArmor(ItemStack item) {
-        if (item == null || item.getType().isAir()) {
+        return item != null && isHighArmorMaterial(item.getType());
+    }
+
+    static boolean isHighArmorMaterial(Material type) {
+        if (type == null || type == Material.AIR) {
             return false;
         }
-        String name = item.getType().name();
+        String name = type.name();
         boolean tier = name.startsWith("DIAMOND_") || name.startsWith("NETHERITE_");
         boolean piece = name.endsWith("_HELMET") || name.endsWith("_CHESTPLATE")
                 || name.endsWith("_LEGGINGS") || name.endsWith("_BOOTS");
@@ -283,6 +305,26 @@ public final class SacrificeListener implements Listener {
     }
 
     // ------------------------------------------------------------------ Corazón: bloqueo de armadura
+
+    /**
+     * Paper avisa después de equipar y el evento no es cancelable. Se revierte en
+     * el tick siguiente; la tarea periódica cubre cualquier ruta restante.
+     */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onArmorChange(PlayerArmorChangeEvent event) {
+        Player player = event.getPlayer();
+        if (!has(player.getUniqueId(), SacrificeType.CORAZON)) {
+            return;
+        }
+        if (!isHighArmor(event.getNewItem())) {
+            return;
+        }
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (player.isOnline()) {
+                enforceArmor(plugin, player);
+            }
+        });
+    }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onArmorClick(InventoryClickEvent event) {

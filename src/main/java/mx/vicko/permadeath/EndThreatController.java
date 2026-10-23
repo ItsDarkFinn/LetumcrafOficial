@@ -11,6 +11,7 @@ import org.bukkit.Sound;
 import org.bukkit.World;
 import org.bukkit.attribute.Attribute;
 import org.bukkit.block.Block;
+import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.entity.Creeper;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
@@ -41,6 +42,10 @@ public final class EndThreatController implements Listener {
     private static final double ARMORED_SHULKER_HEALTH = 45.0;
     private static final double GUARDIAN_HEALTH = 60.0;
 
+    static final String ELECTRIC_CREEPERS_PATH = "phases.35.end-threats.electric-creepers";
+    static final String MODERN_RATIO_KEY = ELECTRIC_CREEPERS_PATH + ".endermans-per-creeper";
+    static final String LEGACY_RATIO_KEY = ELECTRIC_CREEPERS_PATH + ".per-enderman";
+
     private final PermadeathPlugin plugin;
     private final org.bukkit.NamespacedKey electricCreeperKey;
     private final org.bukkit.NamespacedKey armoredShulkerKey;
@@ -54,6 +59,19 @@ public final class EndThreatController implements Listener {
     /** Resetea el conteo de endermans para los creepers electricos (llamar al recargar config). */
     public void onConfigReload() {
         endermanCounter = 0;
+    }
+
+    /** La clave nueva tiene prioridad; sin ella se usa el formato clasico 0.2.44. */
+    static boolean usesModernRatio(ConfigurationSection config) {
+        return config != null && config.isSet(MODERN_RATIO_KEY);
+    }
+
+    static int modernEndermansPerCreeper(ConfigurationSection config) {
+        return Math.max(1, config == null ? 5 : config.getInt(MODERN_RATIO_KEY, 5));
+    }
+
+    static int legacyCreepersPerEnderman(ConfigurationSection config) {
+        return Math.max(1, config == null ? 1 : config.getInt(LEGACY_RATIO_KEY, 1));
     }
 
     public EndThreatController(PermadeathPlugin plugin) {
@@ -81,11 +99,26 @@ public final class EndThreatController implements Listener {
                 || event.getLocation().getWorld().getEnvironment() != World.Environment.THE_END
                 || event.getSpawnReason() != CreatureSpawnEvent.SpawnReason.NATURAL) return;
 
-        // Un creeper electrico por cada N endermans generados naturalmente en el End (MONITOR en main thread, sin sincronizar).
-        int endermansPerCreeper = Math.max(1, plugin.getConfig().getInt(
-                "phases.35.end-threats.electric-creepers.endermans-per-creeper", 5));
-        endermanCounter++;
-        if (endermanCounter % endermansPerCreeper != 0) return;
+        ConfigurationSection config = plugin.getConfig();
+        if (usesModernRatio(config)) {
+            // Formato nuevo: 1 creeper por cada N endermans (MONITOR en main thread).
+            int endermansPerCreeper = modernEndermansPerCreeper(config);
+            endermanCounter++;
+            if (endermanCounter % endermansPerCreeper != 0) return;
+            scheduleElectricCreeper(enderman);
+            return;
+        }
+
+        // Compatibilidad con la configuración clásica 0.2.44: N creepers por
+        // Enderman. Sin la clave nueva, el comportamiento histórico era 1:1.
+        endermanCounter = 0;
+        int perEnderman = legacyCreepersPerEnderman(config);
+        for (int i = 0; i < perEnderman; i++) {
+            scheduleElectricCreeper(enderman);
+        }
+    }
+
+    private void scheduleElectricCreeper(org.bukkit.entity.Enderman enderman) {
         plugin.getServer().getScheduler().runTask(plugin, () -> spawnElectricCreeper(enderman));
     }
 

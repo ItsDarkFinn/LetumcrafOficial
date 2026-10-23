@@ -108,7 +108,10 @@ phases:
     end-threats:
       electric-creepers:
         enabled: true
-        # Un creeper electrico por cada N endermans generados naturalmente en el End.
+        # Formato nuevo: 1 creeper electrico por cada N endermans generados
+        # naturalmente en el End. Si esta clave no existe, se usa el formato
+        # clasico 'per-enderman' (N creepers por Enderman); 'per-enderman: 1'
+        # reproduce el comportamiento historico 1:1.
         endermans-per-creeper: 5
       elytra-guardian:
         enabled: true
